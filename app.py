@@ -248,29 +248,58 @@ def cargar_stock(file_bytes: bytes, filename: str) -> pd.DataFrame:
     return limpiar_stock_desde_reporte(raw)
 
 
-def buscar_archivo_stock_por_defecto() -> Path | None:
-    """
-    Para GitHub/Streamlit Cloud: si existe un archivo dentro de /data,
-    la app lo puede cargar automáticamente.
-
-    Recomendación:
-    - Repositorio público: NO subir stock real. Usar upload manual.
-    - Repositorio privado: se puede guardar data/Stock_07052026.xls.
-    """
-    carpeta = Path("data")
-    if not carpeta.exists():
-        return None
-
-    for patron in ("*.xls", "*.xlsx", "*.xlsm", "*.csv"):
-        encontrados = sorted(carpeta.glob(patron))
-        if encontrados:
-            return encontrados[0]
-    return None
-
-
 # -----------------------------
 # Búsqueda
 # -----------------------------
+def _primer_valor_no_vacio(serie: pd.Series) -> str:
+    for valor in serie:
+        if pd.notna(valor) and str(valor).strip():
+            return str(valor).strip()
+    return ""
+
+
+def _unir_valores_unicos(serie: pd.Series) -> str:
+    valores = []
+    for valor in serie:
+        if pd.notna(valor):
+            texto = str(valor).strip()
+            if texto and texto not in valores:
+                valores.append(texto)
+    return " / ".join(valores)
+
+
+def consolidar_por_codigo(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Si el mismo código aparece en más de una línea del Excel, suma las cantidades.
+    Ejemplo real: B6Y1-14-302A con 316 + 49 = 365.
+    """
+    if df.empty:
+        return df
+
+    trabajo = df.copy()
+    trabajo["cantidad"] = pd.to_numeric(trabajo["cantidad"], errors="coerce").fillna(0)
+
+    agregaciones = {
+        "articulo": _primer_valor_no_vacio,
+        "descripcion": _primer_valor_no_vacio,
+        "estado": _unir_valores_unicos,
+        "unidad": _primer_valor_no_vacio,
+        "cantidad": "sum",
+    }
+
+    if "match_con" in trabajo.columns:
+        agregaciones["match_con"] = _primer_valor_no_vacio
+    if "prioridad" in trabajo.columns:
+        agregaciones["prioridad"] = "min"
+    if "fila_origen" in trabajo.columns:
+        agregaciones["fila_origen"] = lambda s: ", ".join(str(int(x)) for x in s if pd.notna(x))
+
+    agrupado = trabajo.groupby("codigo_normalizado", as_index=False).agg(agregaciones)
+    agrupado["lineas_sumadas"] = trabajo.groupby("codigo_normalizado").size().values
+    agrupado["cantidad"] = agrupado["cantidad"].apply(lambda x: int(x) if float(x).is_integer() else x)
+    return agrupado
+
+
 def buscar_exactos(stock: pd.DataFrame, codigo_leido: str) -> Tuple[pd.DataFrame, Dict[str, object]]:
     info = extraer_candidatos_mazda(codigo_leido)
     candidatos = info["candidatos"]
@@ -284,6 +313,7 @@ def buscar_exactos(stock: pd.DataFrame, codigo_leido: str) -> Tuple[pd.DataFrame
     if not resultado.empty:
         resultado["match_con"] = resultado["codigo_normalizado"].map(lambda x: x if x in prioridad else "")
         resultado["prioridad"] = resultado["codigo_normalizado"].map(lambda x: prioridad.get(x, 999))
+        resultado = consolidar_por_codigo(resultado)
         resultado = resultado.sort_values(["prioridad", "articulo"]).drop(columns=["prioridad"])
 
     return resultado, info
@@ -317,14 +347,20 @@ def buscar_sugerencias(stock: pd.DataFrame, candidatos: List[str], limite: int =
 
     sug = stock.copy()
     sug["puntaje"] = sug["codigo_normalizado"].map(puntaje)
-    sug = sug[sug["puntaje"] > 0].sort_values(["puntaje", "cantidad"], ascending=[False, False])
-    return sug.head(limite).drop(columns=["puntaje"])
+    sug = sug[sug["puntaje"] > 0].copy()
+    if sug.empty:
+        return sug
+
+    sug["prioridad"] = -sug["puntaje"]
+    sug = consolidar_por_codigo(sug)
+    sug = sug.sort_values(["prioridad", "cantidad"], ascending=[True, False]).drop(columns=["prioridad"])
+    return sug.head(limite)
 
 
 def preparar_resultado_para_mostrar(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
-    cols = ["articulo", "descripcion", "estado", "unidad", "cantidad", "codigo_normalizado"]
+    cols = ["articulo", "descripcion", "estado", "unidad", "cantidad", "lineas_sumadas", "codigo_normalizado"]
     if "match_con" in df.columns:
         cols.insert(0, "match_con")
     cols = [c for c in cols if c in df.columns]
@@ -335,7 +371,8 @@ def preparar_resultado_para_mostrar(df: pd.DataFrame) -> pd.DataFrame:
             "descripcion": "Descripción",
             "estado": "Estado",
             "unidad": "Unidad",
-            "cantidad": "Cantidad",
+            "cantidad": "Stock total",
+            "lineas_sumadas": "Líneas sumadas",
             "codigo_normalizado": "Código normalizado",
         }
     )
@@ -349,19 +386,7 @@ st.caption("Lee el código del scanner, lo normaliza y busca únicamente artícu
 
 with st.sidebar:
     st.header("Base de stock")
-    archivo_default = buscar_archivo_stock_por_defecto()
-
-    usar_default = False
-    if archivo_default is not None:
-        usar_default = st.checkbox(
-            f"Usar stock del repositorio: {archivo_default.name}",
-            value=True,
-            help="Útil si el repo es privado y subiste el stock a la carpeta data/.",
-        )
-
-    uploaded = None
-    if not usar_default:
-        uploaded = st.file_uploader("Subí el archivo de stock", type=["xls", "xlsx", "xlsm", "csv"])
+    uploaded = st.file_uploader("Subí el archivo de stock", type=["xls", "xlsx", "xlsm", "csv"])
 
     st.markdown("---")
     st.subheader("Ejemplos reales Mazda")
@@ -375,18 +400,12 @@ with st.sidebar:
         language="text",
     )
 
-if usar_default and archivo_default is not None:
-    file_bytes = archivo_default.read_bytes()
-    file_name = archivo_default.name
-elif uploaded is not None:
-    file_bytes = uploaded.getvalue()
-    file_name = uploaded.name
-else:
+if uploaded is None:
     st.info("Subí el Excel de stock para empezar. Puede ser el reporte .xls que ya usás.")
     st.stop()
 
 try:
-    stock_df = cargar_stock(file_bytes, file_name)
+    stock_df = cargar_stock(uploaded.getvalue(), uploaded.name)
 except ImportError as e:
     st.error("No se pudo leer el archivo .xls porque falta la librería xlrd.")
     st.code("pip install xlrd", language="bash")
@@ -404,7 +423,7 @@ if stock_df.empty:
 col1, col2, col3 = st.columns(3)
 col1.metric("Artículos con stock", f"{len(stock_df):,}".replace(",", "."))
 col2.metric("Stock total unidades", f"{int(pd.to_numeric(stock_df['cantidad'], errors='coerce').fillna(0).sum()):,}".replace(",", "."))
-col3.metric("Archivo", file_name)
+col3.metric("Archivo", uploaded.name)
 
 st.markdown("---")
 
@@ -430,7 +449,7 @@ if modo == "Un código":
             st.write("**Candidatos de búsqueda:**", info["candidatos"])
 
         if not exactos.empty:
-            st.success(f"Encontré {len(exactos)} artículo(s) con stock.")
+            st.success(f"Encontré {len(exactos)} artículo(s) con stock consolidado.")
             st.dataframe(preparar_resultado_para_mostrar(exactos), use_container_width=True, hide_index=True)
         else:
             st.warning("No encontré coincidencia exacta con stock.")
@@ -479,6 +498,7 @@ else:
                     "estado",
                     "unidad",
                     "cantidad",
+                    "lineas_sumadas",
                     "codigo_normalizado",
                     "candidatos",
                 ]
@@ -489,7 +509,8 @@ else:
                     "descripcion": "Descripción",
                     "estado": "Estado",
                     "unidad": "Unidad",
-                    "cantidad": "Cantidad",
+                    "cantidad": "Stock total",
+                    "lineas_sumadas": "Líneas sumadas",
                     "codigo_normalizado": "Código normalizado",
                     "candidatos": "Candidatos buscados",
                 }
