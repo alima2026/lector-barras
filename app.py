@@ -481,6 +481,7 @@ def agregar_item_a_mudanza(
     deposito_origen: str,
     deposito_destino: str,
     observaciones: str = "",
+    validar_stock: bool = True,
 ) -> Tuple[bool, str]:
     codigo_norm = str(row.get("codigo_normalizado", ""))
     stock_total = numero_seguro(row.get("cantidad", 0), 0)
@@ -489,7 +490,7 @@ def agregar_item_a_mudanza(
     if cantidad_mudada <= 0:
         return False, "La cantidad a mudar tiene que ser mayor a cero."
 
-    if ya_pickeado + float(cantidad_mudada) > stock_total:
+    if validar_stock and ya_pickeado + float(cantidad_mudada) > stock_total:
         disponible = max(stock_total - ya_pickeado, 0)
         return (
             False,
@@ -530,6 +531,39 @@ def actualizar_ubicacion_item(item_id: int, nueva_ubicacion: str) -> Tuple[bool,
             item["ubicacion"] = ubicacion
             return True, "Ubicación actualizada."
     return False, "No encontré esa línea de mudanza."
+
+
+def actualizar_cantidad_item(item_id: int, nueva_cantidad: float) -> Tuple[bool, str]:
+    if nueva_cantidad <= 0:
+        return False, "La cantidad a mudar tiene que ser mayor a cero."
+
+    item_objetivo = None
+    for item in st.session_state.pick_items:
+        if int(item.get("item_id", 0)) == int(item_id):
+            item_objetivo = item
+            break
+
+    if item_objetivo is None:
+        return False, "No encontré esa línea de mudanza."
+
+    codigo_norm = str(item_objetivo.get("codigo_normalizado", ""))
+    stock_total = numero_seguro(item_objetivo.get("stock_total", 0), 0)
+    es_manual = str(item_objetivo.get("estado", "")).strip().upper() == "MANUAL" or stock_total <= 0
+
+    if not es_manual:
+        total_otros = 0.0
+        for item in st.session_state.pick_items:
+            if int(item.get("item_id", 0)) == int(item_id):
+                continue
+            if str(item.get("codigo_normalizado", "")) == codigo_norm:
+                total_otros += numero_seguro(item.get("cantidad_mudada", 0), 0)
+
+        if total_otros + float(nueva_cantidad) > stock_total:
+            disponible = max(stock_total - total_otros, 0)
+            return False, f"No se puede actualizar. Stock total {stock_total:g}, ya marcado en otras líneas {total_otros:g}, disponible {disponible:g}."
+
+    item_objetivo["cantidad_mudada"] = float(nueva_cantidad)
+    return True, "Cantidad actualizada."
 
 
 def pick_items_df() -> pd.DataFrame:
@@ -1350,6 +1384,58 @@ with tab_buscar:
                         else:
                             st.error(msg)
 
+            if exactos.empty:
+                st.subheader("Agregar articulo manual")
+                st.caption("Usalo cuando el articulo no existe en el Excel/base cargada. No descuenta stock de DARKINEL, pero si entra a la mudanza y al POLO.")
+                with st.form("form_agregar_manual"):
+                    m1, m2, m3 = st.columns([1.2, 2, 0.8])
+                    articulo_manual = m1.text_input("Articulo", value=str(codigo).strip().upper())
+                    descripcion_manual = m2.text_input("Descripcion", value="")
+                    unidad_manual = m3.text_input("Unidad", value="uni")
+
+                    m4, m5, m6, m7, m8 = st.columns(5)
+                    cantidad_manual = m4.number_input("Cantidad a mudar", min_value=1.0, value=1.0, step=1.0, key="cantidad_manual")
+                    pallet_manual = m5.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1, key="pallet_manual")
+                    cantidad_bultos_manual = m6.number_input("Cantidad de bultos", min_value=1, value=int(cantidad_bultos_activo), step=1, key="cantidad_bultos_manual")
+                    bulto_manual = m7.number_input("Bulto", min_value=1, max_value=int(cantidad_bultos_manual), value=min(int(bulto_activo), int(cantidad_bultos_manual)), step=1, key="bulto_manual")
+                    ubicacion_manual = m8.text_input("Ubicacion", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
+                    observaciones_manual = st.text_input("Observaciones manual", value="Articulo agregado manualmente")
+                    submit_manual = st.form_submit_button("Agregar manual a mudanza", type="primary")
+
+                if submit_manual:
+                    articulo_manual = str(articulo_manual).strip().upper()
+                    if not articulo_manual:
+                        st.error("El articulo manual no puede quedar vacio.")
+                    else:
+                        row_manual = pd.Series(
+                            {
+                                "articulo": articulo_manual,
+                                "descripcion": str(descripcion_manual).strip() or "SIN DESCRIPCION",
+                                "estado": "MANUAL",
+                                "unidad": str(unidad_manual).strip() or "uni",
+                                "cantidad": 0,
+                                "codigo_normalizado": normalizar_codigo(articulo_manual),
+                            }
+                        )
+                        ok, msg = agregar_item_a_mudanza(
+                            lectura_original=codigo,
+                            row=row_manual,
+                            cantidad_mudada=cantidad_manual,
+                            pallet=pallet_manual,
+                            cantidad_bultos=cantidad_bultos_manual,
+                            bulto=bulto_manual,
+                            ubicacion=ubicacion_manual,
+                            deposito_origen=deposito_origen,
+                            deposito_destino=deposito_destino,
+                            observaciones=observaciones_manual,
+                            validar_stock=False,
+                        )
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
     else:
         codigos_texto = st.text_area("Pegá varios códigos, uno por línea", height=160)
         st.caption("En este modo la app busca y muestra el primer match de cada línea. Para registrar ubicación exacta, conviene agregar de a un código.")
@@ -1495,8 +1581,34 @@ with tab_pallets:
     st.markdown("---")
     st.subheader("Corregir / quitar líneas")
     if df_pick.empty:
-        st.caption("No hay líneas para quitar.")
+        st.caption("No hay líneas para corregir.")
     else:
+        opciones_corregir = [f"{r.item_id}) Pallet {r.pallet} | Bulto {r.bulto} | {r.ubicacion} | {r.articulo} | Cant. {r.cantidad_mudada}" for r in df_pick.itertuples()]
+
+        st.markdown("**Modificar cantidad a mudar**")
+        linea_cantidad = st.selectbox("Línea para modificar cantidad", opciones_corregir, key="linea_modificar_cantidad")
+        id_cantidad = int(linea_cantidad.split(")", 1)[0])
+        cantidad_actual = float(pd.to_numeric(df_pick.loc[df_pick["item_id"] == id_cantidad, "cantidad_mudada"].iloc[0], errors="coerce"))
+        stock_total_linea = float(pd.to_numeric(df_pick.loc[df_pick["item_id"] == id_cantidad, "stock_total"].iloc[0], errors="coerce"))
+        estado_linea = str(df_pick.loc[df_pick["item_id"] == id_cantidad, "estado"].iloc[0]).strip().upper()
+        max_cantidad = None if estado_linea == "MANUAL" or stock_total_linea <= 0 else max(stock_total_linea, cantidad_actual)
+        nueva_cantidad = st.number_input(
+            "Nueva cantidad",
+            min_value=1.0,
+            max_value=max_cantidad,
+            value=cantidad_actual,
+            step=1.0,
+            key="nueva_cantidad_mudanza",
+        )
+        if st.button("Guardar nueva cantidad"):
+            ok, msg = actualizar_cantidad_item(id_cantidad, nueva_cantidad)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+        st.markdown("**Quitar líneas**")
         opciones_quitar = [f"{r.item_id}) Pallet {r.pallet} | Bulto {r.bulto} | {r.ubicacion} | {r.articulo} | Cant. {r.cantidad_mudada}" for r in df_pick.itertuples()]
         quitar = st.multiselect("Líneas para quitar", opciones_quitar)
         if st.button("Quitar líneas seleccionadas") and quitar:
