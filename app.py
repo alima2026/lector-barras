@@ -8,6 +8,7 @@ import streamlit as st
 
 try:
     from reportlab.graphics.barcode import code128
+    from reportlab.graphics.barcode import code39
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
@@ -893,11 +894,18 @@ def nombre_archivo_control() -> str:
     return f"control_depositos_darkinel_polo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
 
 
-def _barcode_articulo_flowable(articulo: str):
-    codigo = str(articulo).strip()
+def _barcode_articulo_flowable(codigo: str):
     if not codigo:
         codigo = "SIN-CODIGO"
-    return code128.Code128(codigo, barHeight=12 * mm, barWidth=0.33 * mm, humanReadable=True)
+    return code39.Standard39(codigo, barHeight=14 * mm, barWidth=0.42 * mm, humanReadable=False)
+
+
+def codigo_barra_articulo(articulo: str, corregir_guion_teclado: bool = False) -> str:
+    codigo = str(articulo or "").strip().upper()
+    codigo = "".join(ch if ch in CODE39_PATTERNS and ch != "*" else "-" for ch in codigo)
+    if corregir_guion_teclado:
+        codigo = codigo.replace("-", "/")
+    return codigo
 
 
 CODE39_PATTERNS = {
@@ -960,8 +968,7 @@ def _html_escape(valor) -> str:
 
 
 def _codigo_barra_code39_svg(codigo: str, height: int = 54, module: int = 2) -> str:
-    limpio = str(codigo or "SIN-CODIGO").upper()
-    limpio = "".join(ch if ch in CODE39_PATTERNS and ch != "*" else "-" for ch in limpio)
+    limpio = codigo_barra_articulo(codigo) or "SIN-CODIGO"
     completo = f"*{limpio}*"
     width = (len(completo) * 13 + max(len(completo) - 1, 0)) * module
     x = 0
@@ -977,7 +984,7 @@ def _codigo_barra_code39_svg(codigo: str, height: int = 54, module: int = 2) -> 
     return f'<svg class="barcode" viewBox="0 0 {width} {height}" preserveAspectRatio="none">{"".join(rects)}</svg>'
 
 
-def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "pallet") -> bytes:
+def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "pallet", corregir_guion_teclado: bool = False) -> bytes:
     trabajo = normalizar_df_pick(df_pick)
     if trabajo.empty:
         return b""
@@ -1000,6 +1007,7 @@ def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "
         filas_html = []
         for r in trabajo_pagina.sort_values(["articulo", "descripcion"]).itertuples():
             articulo = str(getattr(r, "articulo", "")).strip()
+            codigo_barra = codigo_barra_articulo(articulo, corregir_guion_teclado)
             descripcion = str(getattr(r, "descripcion", "")).strip()
             cantidad = formatear_numero(getattr(r, "cantidad_mudada", 0))
             filas_html.append(
@@ -1007,7 +1015,7 @@ def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "
                 f"<td class='art'>{_html_escape(articulo)}</td>"
                 f"<td>{_html_escape(descripcion)}</td>"
                 f"<td class='cant'>{_html_escape(cantidad)}</td>"
-                f"<td class='bar'>{_codigo_barra_code39_svg(articulo)}<div>{_html_escape(articulo)}</div></td>"
+                f"<td class='bar'>{_codigo_barra_code39_svg(codigo_barra)}<div>{_html_escape(articulo)}</div></td>"
                 "</tr>"
             )
         if not filas_html:
@@ -1067,7 +1075,7 @@ def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "
     return html.encode("utf-8")
 
 
-def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "pallet") -> bytes:
+def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "pallet", corregir_guion_teclado: bool = False) -> bytes:
     if not REPORTLAB_DISPONIBLE:
         return b""
 
@@ -1132,6 +1140,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
         rows = [["Articulo", "Descripcion", "Cant.", "Codigo de barras"]]
         for r in trabajo_pagina.sort_values(["articulo", "descripcion"]).itertuples():
             articulo = str(getattr(r, "articulo", "")).strip()
+            codigo_barra = codigo_barra_articulo(articulo, corregir_guion_teclado)
             descripcion = str(getattr(r, "descripcion", "")).strip()
             cantidad = formatear_numero(getattr(r, "cantidad_mudada", 0))
             rows.append(
@@ -1139,7 +1148,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
                     Paragraph(articulo, styles["Normal"]),
                     Paragraph(descripcion[:80], styles["Normal"]),
                     Paragraph(str(cantidad), styles["Normal"]),
-                    _barcode_articulo_flowable(articulo),
+                    [_barcode_articulo_flowable(codigo_barra), Paragraph(articulo, styles["Normal"])],
                 ]
             )
 
@@ -1431,12 +1440,17 @@ with tab_pallets:
         st.markdown("---")
         st.subheader("Hoja A4 con codigos de barras")
         pallets_disponibles = sorted(pd.to_numeric(df_pick["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
-        c_pdf1, c_pdf2 = st.columns(2)
+        c_pdf1, c_pdf2, c_pdf3 = st.columns([1, 1, 1.4])
         pallet_pdf = c_pdf1.selectbox("Pallet para imprimir", pallets_disponibles)
         modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por bulto"], horizontal=True)
+        corregir_guion_teclado = c_pdf3.checkbox(
+            "Corregir guion del lector",
+            value=True,
+            help="Dejalo marcado si al escanear el guion sale como apostrofe. Si el lector ya lee bien los guiones, desmarcalo.",
+        )
         modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por bulto" else "pallet"
         if REPORTLAB_DISPONIBLE:
-            pdf_bytes = generar_pdf_pallet_bultos(df_pick, pallet_pdf, modo_pdf_interno)
+            pdf_bytes = generar_pdf_pallet_bultos(df_pick, pallet_pdf, modo_pdf_interno, corregir_guion_teclado)
             st.download_button(
                 "Descargar A4 pallet / bultos PDF",
                 data=pdf_bytes,
@@ -1445,7 +1459,7 @@ with tab_pallets:
                 type="primary",
             )
         else:
-            html_bytes = generar_html_pallet_bultos(df_pick, pallet_pdf, modo_pdf_interno)
+            html_bytes = generar_html_pallet_bultos(df_pick, pallet_pdf, modo_pdf_interno, corregir_guion_teclado)
             st.warning("Reportlab no esta instalado en Streamlit Cloud. Mientras tanto podes descargar esta hoja HTML, abrirla e imprimirla en A4 o guardarla como PDF.")
             st.download_button(
                 "Descargar A4 imprimible HTML",
