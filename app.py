@@ -546,24 +546,36 @@ def actualizar_cantidad_item(item_id: int, nueva_cantidad: float) -> Tuple[bool,
     if item_objetivo is None:
         return False, "No encontré esa línea de mudanza."
 
-    codigo_norm = str(item_objetivo.get("codigo_normalizado", ""))
-    stock_total = numero_seguro(item_objetivo.get("stock_total", 0), 0)
-    es_manual = str(item_objetivo.get("estado", "")).strip().upper() == "MANUAL" or stock_total <= 0
-
-    if not es_manual:
-        total_otros = 0.0
-        for item in st.session_state.pick_items:
-            if int(item.get("item_id", 0)) == int(item_id):
-                continue
-            if str(item.get("codigo_normalizado", "")) == codigo_norm:
-                total_otros += numero_seguro(item.get("cantidad_mudada", 0), 0)
-
-        if total_otros + float(nueva_cantidad) > stock_total:
-            disponible = max(stock_total - total_otros, 0)
-            return False, f"No se puede actualizar. Stock total {stock_total:g}, ya marcado en otras líneas {total_otros:g}, disponible {disponible:g}."
-
     item_objetivo["cantidad_mudada"] = float(nueva_cantidad)
     return True, "Cantidad actualizada."
+
+
+def actualizar_linea_item(
+    item_id: int,
+    nueva_cantidad: float,
+    nuevo_pallet: int,
+    nueva_cantidad_bultos: int,
+    nuevo_bulto: int,
+    nueva_ubicacion: str,
+    stock_darkinel_restante: float | None = None,
+) -> Tuple[bool, str]:
+    ok, msg = actualizar_cantidad_item(item_id, nueva_cantidad)
+    if not ok:
+        return ok, msg
+
+    for item in st.session_state.pick_items:
+        if int(item.get("item_id", 0)) == int(item_id):
+            item["pallet"] = int(nuevo_pallet)
+            item["cantidad_bultos"] = int(nueva_cantidad_bultos)
+            item["bulto"] = int(nuevo_bulto)
+            item["ubicacion"] = str(nueva_ubicacion).strip().upper() or "PENDIENTE"
+            if stock_darkinel_restante is not None:
+                item["stock_total"] = float(nueva_cantidad) + float(stock_darkinel_restante)
+                obs = str(item.get("observaciones", "")).strip()
+                marca = f"Stock real Darkinel restante: {float(stock_darkinel_restante):g}"
+                item["observaciones"] = f"{obs} | {marca}".strip(" |")
+            return True, "Línea actualizada."
+    return False, "No encontré esa línea de mudanza."
 
 
 def pick_items_df() -> pd.DataFrame:
@@ -700,15 +712,49 @@ def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def stock_darkinel_actualizado(stock_consolidado: pd.DataFrame, df_pick: pd.DataFrame) -> pd.DataFrame:
-    if stock_consolidado.empty:
-        return pd.DataFrame()
-    base = stock_consolidado.copy()
+    columnas_finales = [
+        "Artículo",
+        "Descripción",
+        "Estado",
+        "Unidad",
+        "Stock original Darkinel",
+        "Mudado al Polo",
+        "Stock restante Darkinel",
+        "Código normalizado",
+        "Líneas sumadas",
+        "Control",
+    ]
+    if stock_consolidado.empty and df_pick.empty:
+        return pd.DataFrame(columns=columnas_finales)
+
+    base = stock_consolidado.copy() if not stock_consolidado.empty else pd.DataFrame()
+    if base.empty:
+        base = pd.DataFrame(columns=["articulo", "descripcion", "estado", "unidad", "cantidad", "codigo_normalizado", "lineas_sumadas"])
     base["cantidad"] = pd.to_numeric(base["cantidad"], errors="coerce").fillna(0)
+
+    if not df_pick.empty:
+        trabajo = normalizar_df_pick(df_pick)
+        manuales = trabajo[~trabajo["codigo_normalizado"].isin(base["codigo_normalizado"])].copy()
+        if not manuales.empty:
+            manuales_base = (
+                manuales.groupby("codigo_normalizado", as_index=False)
+                .agg(
+                    articulo=("articulo", _primer_valor_no_vacio),
+                    descripcion=("descripcion", _primer_valor_no_vacio),
+                    estado=("estado", _primer_valor_no_vacio),
+                    unidad=("unidad", _primer_valor_no_vacio),
+                    cantidad=("stock_total", "max"),
+                )
+            )
+            manuales_base["estado"] = manuales_base["estado"].replace("", "MANUAL")
+            manuales_base["lineas_sumadas"] = 0
+            base = pd.concat([base, manuales_base], ignore_index=True)
+
     mudado = mudado_por_codigo(df_pick)
     actualizado = base.merge(mudado, on="codigo_normalizado", how="left")
     actualizado["mudado_al_polo"] = actualizado["mudado_al_polo"].fillna(0)
     actualizado["stock_restante_darkinel"] = actualizado["cantidad"] - actualizado["mudado_al_polo"]
-    actualizado["control"] = actualizado["stock_restante_darkinel"].apply(lambda x: "ERROR: mudanza mayor al stock" if x < 0 else "OK")
+    actualizado["control"] = actualizado["stock_restante_darkinel"].apply(lambda x: "REVISAR: mudanza mayor al stock" if x < 0 else "OK")
     actualizado["stock_restante_darkinel"] = actualizado["stock_restante_darkinel"].clip(lower=0)
     for col in ["cantidad", "mudado_al_polo", "stock_restante_darkinel"]:
         actualizado[col] = actualizado[col].apply(formatear_numero)
@@ -725,20 +771,7 @@ def stock_darkinel_actualizado(stock_consolidado: pd.DataFrame, df_pick: pd.Data
             "lineas_sumadas": "Líneas sumadas",
             "control": "Control",
         }
-    )[
-        [
-            "Artículo",
-            "Descripción",
-            "Estado",
-            "Unidad",
-            "Stock original Darkinel",
-            "Mudado al Polo",
-            "Stock restante Darkinel",
-            "Código normalizado",
-            "Líneas sumadas",
-            "Control",
-        ]
-    ]
+    )[columnas_finales]
 
 
 def extraer_columna(df: pd.DataFrame, posibles: List[str]) -> str:
@@ -1357,7 +1390,7 @@ with tab_buscar:
                 else:
                     with st.form("form_agregar_un_codigo"):
                         c1, c2, c3, c4, c5 = st.columns(5)
-                        cantidad_mudar = c1.number_input("Cantidad a mudar", min_value=1.0, max_value=float(disponible), value=1.0, step=1.0)
+                        cantidad_mudar = c1.number_input("Cantidad a mudar", min_value=1.0, value=1.0, step=1.0)
                         pallet = c2.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1)
                         cantidad_bultos = c3.number_input("Cantidad de bultos", min_value=1, value=int(cantidad_bultos_activo), step=1)
                         bulto = c4.number_input("Bulto", min_value=1, max_value=int(cantidad_bultos), value=min(int(bulto_activo), int(cantidad_bultos)), step=1)
@@ -1377,6 +1410,7 @@ with tab_buscar:
                             deposito_origen=deposito_origen,
                             deposito_destino=deposito_destino,
                             observaciones=observaciones,
+                            validar_stock=False,
                         )
                         if ok:
                             st.success(msg)
@@ -1393,12 +1427,13 @@ with tab_buscar:
                     descripcion_manual = m2.text_input("Descripcion", value="")
                     unidad_manual = m3.text_input("Unidad", value="uni")
 
-                    m4, m5, m6, m7, m8 = st.columns(5)
+                    m4, m5, m6, m7, m8, m9 = st.columns(6)
                     cantidad_manual = m4.number_input("Cantidad a mudar", min_value=1.0, value=1.0, step=1.0, key="cantidad_manual")
-                    pallet_manual = m5.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1, key="pallet_manual")
-                    cantidad_bultos_manual = m6.number_input("Cantidad de bultos", min_value=1, value=int(cantidad_bultos_activo), step=1, key="cantidad_bultos_manual")
-                    bulto_manual = m7.number_input("Bulto", min_value=1, max_value=int(cantidad_bultos_manual), value=min(int(bulto_activo), int(cantidad_bultos_manual)), step=1, key="bulto_manual")
-                    ubicacion_manual = m8.text_input("Ubicacion", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
+                    stock_darkinel_manual = m5.number_input("Queda en Darkinel", min_value=0.0, value=0.0, step=1.0, key="stock_darkinel_manual")
+                    pallet_manual = m6.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1, key="pallet_manual")
+                    cantidad_bultos_manual = m7.number_input("Cantidad de bultos", min_value=1, value=int(cantidad_bultos_activo), step=1, key="cantidad_bultos_manual")
+                    bulto_manual = m8.number_input("Bulto", min_value=1, max_value=int(cantidad_bultos_manual), value=min(int(bulto_activo), int(cantidad_bultos_manual)), step=1, key="bulto_manual")
+                    ubicacion_manual = m9.text_input("Ubicacion", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
                     observaciones_manual = st.text_input("Observaciones manual", value="Articulo agregado manualmente")
                     submit_manual = st.form_submit_button("Agregar manual a mudanza", type="primary")
 
@@ -1413,7 +1448,7 @@ with tab_buscar:
                                 "descripcion": str(descripcion_manual).strip() or "SIN DESCRIPCION",
                                 "estado": "MANUAL",
                                 "unidad": str(unidad_manual).strip() or "uni",
-                                "cantidad": 0,
+                                "cantidad": float(cantidad_manual) + float(stock_darkinel_manual),
                                 "codigo_normalizado": normalizar_codigo(articulo_manual),
                             }
                         )
@@ -1483,6 +1518,7 @@ with tab_buscar:
                             deposito_origen=deposito_origen,
                             deposito_destino=deposito_destino,
                             observaciones="Carga masiva",
+                            validar_stock=False,
                         )
                         if ok:
                             agregados += 1
@@ -1504,7 +1540,81 @@ with tab_pallets:
 
     st.subheader("Detalle de mudanza")
     detalle_display = preparar_detalle_mudanza(df_pick)
-    st.dataframe(detalle_display, use_container_width=True, hide_index=True)
+    if df_pick.empty:
+        st.dataframe(detalle_display, use_container_width=True, hide_index=True)
+    else:
+        detalle_editor = normalizar_df_pick(df_pick)[
+            [
+                "item_id",
+                "fecha_hora",
+                "deposito_origen",
+                "deposito_destino",
+                "pallet",
+                "cantidad_bultos",
+                "bulto",
+                "ubicacion",
+                "lectura_scanner",
+                "articulo",
+                "descripcion",
+                "unidad",
+                "cantidad_mudada",
+                "stock_total",
+                "stock_restante_darkinel",
+                "codigo_normalizado",
+                "observaciones",
+            ]
+        ].rename(
+            columns={
+                "item_id": "ID",
+                "fecha_hora": "Fecha/Hora",
+                "deposito_origen": "Depósito origen",
+                "deposito_destino": "Depósito destino",
+                "pallet": "Pallet",
+                "cantidad_bultos": "Cantidad de bultos",
+                "bulto": "Bulto",
+                "ubicacion": "Ubicación",
+                "lectura_scanner": "Lectura scanner",
+                "articulo": "Artículo",
+                "descripcion": "Descripción",
+                "unidad": "Unidad",
+                "cantidad_mudada": "Cantidad mudada",
+                "stock_total": "Stock original Darkinel",
+                "stock_restante_darkinel": "Stock restante Darkinel",
+                "codigo_normalizado": "Código normalizado",
+                "observaciones": "Observaciones",
+            }
+        )
+        detalle_editado = st.data_editor(
+            detalle_editor,
+            use_container_width=True,
+            hide_index=True,
+            disabled=["ID", "Stock original Darkinel", "Stock restante Darkinel"],
+            num_rows="fixed",
+            key="detalle_mudanza_editor",
+        )
+        if st.button("Guardar cambios del detalle"):
+            por_id = {int(item.get("item_id", 0)): item for item in st.session_state.pick_items}
+            for row in detalle_editado.to_dict("records"):
+                item_id = int(row.get("ID", 0))
+                item = por_id.get(item_id)
+                if not item:
+                    continue
+                item["fecha_hora"] = str(row.get("Fecha/Hora", "")).strip()
+                item["deposito_origen"] = str(row.get("Depósito origen", "")).strip() or "DARKINEL"
+                item["deposito_destino"] = str(row.get("Depósito destino", "")).strip() or "POLO LOGISTICO"
+                item["pallet"] = entero_seguro(row.get("Pallet", 1), 1)
+                item["cantidad_bultos"] = entero_seguro(row.get("Cantidad de bultos", 1), 1)
+                item["bulto"] = max(1, min(entero_seguro(row.get("Bulto", 1), 1), int(item["cantidad_bultos"])))
+                item["ubicacion"] = str(row.get("Ubicación", "")).strip().upper() or "PENDIENTE"
+                item["lectura_scanner"] = str(row.get("Lectura scanner", "")).strip()
+                item["articulo"] = str(row.get("Artículo", "")).strip()
+                item["descripcion"] = str(row.get("Descripción", "")).strip()
+                item["unidad"] = str(row.get("Unidad", "")).strip()
+                item["cantidad_mudada"] = numero_seguro(row.get("Cantidad mudada", 0), 0)
+                item["codigo_normalizado"] = str(row.get("Código normalizado", "")).strip() or normalizar_codigo(item["articulo"])
+                item["observaciones"] = str(row.get("Observaciones", "")).strip()
+            st.success("Detalle actualizado.")
+            st.rerun()
 
     if not df_pick.empty:
         excel_bytes = generar_excel_control(stock_consolidado, df_pick, stock_polo_anterior, ubicaciones_anteriores, historial_anterior)
@@ -1585,23 +1695,50 @@ with tab_pallets:
     else:
         opciones_corregir = [f"{r.item_id}) Pallet {r.pallet} | Bulto {r.bulto} | {r.ubicacion} | {r.articulo} | Cant. {r.cantidad_mudada}" for r in df_pick.itertuples()]
 
-        st.markdown("**Modificar cantidad a mudar**")
-        linea_cantidad = st.selectbox("Línea para modificar cantidad", opciones_corregir, key="linea_modificar_cantidad")
+        st.markdown("**Modificar línea**")
+        linea_cantidad = st.selectbox("Línea para modificar", opciones_corregir, key="linea_modificar_cantidad")
         id_cantidad = int(linea_cantidad.split(")", 1)[0])
-        cantidad_actual = float(pd.to_numeric(df_pick.loc[df_pick["item_id"] == id_cantidad, "cantidad_mudada"].iloc[0], errors="coerce"))
-        stock_total_linea = float(pd.to_numeric(df_pick.loc[df_pick["item_id"] == id_cantidad, "stock_total"].iloc[0], errors="coerce"))
-        estado_linea = str(df_pick.loc[df_pick["item_id"] == id_cantidad, "estado"].iloc[0]).strip().upper()
-        max_cantidad = None if estado_linea == "MANUAL" or stock_total_linea <= 0 else max(stock_total_linea, cantidad_actual)
-        nueva_cantidad = st.number_input(
-            "Nueva cantidad",
-            min_value=1.0,
-            max_value=max_cantidad,
-            value=cantidad_actual,
-            step=1.0,
-            key="nueva_cantidad_mudanza",
-        )
-        if st.button("Guardar nueva cantidad"):
-            ok, msg = actualizar_cantidad_item(id_cantidad, nueva_cantidad)
+        fila_editar = df_pick.loc[df_pick["item_id"] == id_cantidad].iloc[0]
+        cantidad_actual = float(pd.to_numeric(fila_editar["cantidad_mudada"], errors="coerce"))
+        pallet_actual = int(pd.to_numeric(fila_editar["pallet"], errors="coerce"))
+        cantidad_bultos_actual = int(pd.to_numeric(fila_editar["cantidad_bultos"], errors="coerce"))
+        bulto_actual = int(pd.to_numeric(fila_editar["bulto"], errors="coerce"))
+        ubicacion_actual_editar = str(fila_editar["ubicacion"])
+        stock_total_linea = float(pd.to_numeric(fila_editar["stock_total"], errors="coerce"))
+        stock_restante_sugerido = max(stock_total_linea - cantidad_actual, 0)
+
+        with st.form("form_modificar_linea"):
+            e1, e2, e3, e4, e5 = st.columns(5)
+            nueva_cantidad = e1.number_input("Cantidad a mudar", min_value=1.0, value=cantidad_actual, step=1.0)
+            nuevo_pallet = e2.number_input("Pallet", min_value=1, value=pallet_actual, step=1)
+            nueva_cantidad_bultos = e3.number_input("Cantidad de bultos", min_value=1, value=cantidad_bultos_actual, step=1)
+            nuevo_bulto = e4.number_input("Bulto", min_value=1, max_value=int(nueva_cantidad_bultos), value=min(bulto_actual, int(nueva_cantidad_bultos)), step=1)
+            nueva_ubicacion_editar = e5.text_input("Ubicación", value="" if ubicacion_actual_editar == "PENDIENTE" else ubicacion_actual_editar)
+
+            aplicar_stock_real = st.checkbox(
+                "Actualizar stock real que queda en Darkinel",
+                value=str(fila_editar.get("estado", "")).strip().upper() == "MANUAL",
+                help="Usalo si el Excel no tiene el stock real o si el artículo fue creado manualmente.",
+            )
+            stock_darkinel_restante = st.number_input(
+                "Cantidad que queda en Darkinel",
+                min_value=0.0,
+                value=float(stock_restante_sugerido),
+                step=1.0,
+                disabled=not aplicar_stock_real,
+            )
+            guardar_linea = st.form_submit_button("Guardar cambios de línea", type="primary")
+
+        if guardar_linea:
+            ok, msg = actualizar_linea_item(
+                id_cantidad,
+                nueva_cantidad,
+                nuevo_pallet,
+                nueva_cantidad_bultos,
+                nuevo_bulto,
+                nueva_ubicacion_editar,
+                stock_darkinel_restante if aplicar_stock_real else None,
+            )
             if ok:
                 st.success(msg)
                 st.rerun()
