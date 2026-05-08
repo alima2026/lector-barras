@@ -1,6 +1,9 @@
 import io
+import json
 import re
+import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 import pandas as pd
@@ -35,6 +38,80 @@ st.set_page_config(
 # -----------------------------
 # Normalización de códigos
 # -----------------------------
+DB_PATH = Path(__file__).resolve().parent / "data" / "mudanza_estado.sqlite"
+
+
+def conectar_db() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS estado_app (
+            clave TEXT PRIMARY KEY,
+            valor TEXT NOT NULL,
+            actualizado_en TEXT NOT NULL
+        )
+        """
+    )
+    return conn
+
+
+def guardar_estado_db(clave: str, valor) -> None:
+    try:
+        payload = json.dumps(valor, ensure_ascii=False, default=str)
+        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with conectar_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO estado_app (clave, valor, actualizado_en)
+                VALUES (?, ?, ?)
+                ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+                """,
+                (clave, payload, ahora),
+            )
+    except Exception:
+        pass
+
+
+def cargar_estado_db(clave: str, defecto):
+    try:
+        with conectar_db() as conn:
+            row = conn.execute("SELECT valor FROM estado_app WHERE clave = ?", (clave,)).fetchone()
+        if not row:
+            return defecto
+        return json.loads(row[0])
+    except Exception:
+        return defecto
+
+
+def fecha_estado_db(clave: str) -> str:
+    try:
+        with conectar_db() as conn:
+            row = conn.execute("SELECT actualizado_en FROM estado_app WHERE clave = ?", (clave,)).fetchone()
+        return "" if not row else str(row[0])
+    except Exception:
+        return ""
+
+
+def guardar_mudanza_actual_db() -> None:
+    guardar_estado_db(
+        "mudanza_actual",
+        {
+            "pick_items": st.session_state.get("pick_items", []),
+            "pick_seq": st.session_state.get("pick_seq", 0),
+        },
+    )
+
+
+def cargar_mudanza_actual_db() -> Dict[str, object]:
+    estado = cargar_estado_db("mudanza_actual", {"pick_items": [], "pick_seq": 0})
+    if not isinstance(estado, dict):
+        return {"pick_items": [], "pick_seq": 0}
+    estado.setdefault("pick_items", [])
+    estado.setdefault("pick_seq", 0)
+    return estado
+
+
 def normalizar_codigo(valor) -> str:
     """
     Convierte cualquier código a una forma comparable:
@@ -388,9 +465,11 @@ def preparar_resultado_para_mostrar(df: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------
 def inicializar_estado() -> None:
     if "pick_items" not in st.session_state:
-        st.session_state.pick_items = []
+        estado_db = cargar_mudanza_actual_db()
+        st.session_state.pick_items = estado_db.get("pick_items", [])
     if "pick_seq" not in st.session_state:
-        st.session_state.pick_seq = 0
+        estado_db = cargar_mudanza_actual_db()
+        st.session_state.pick_seq = int(estado_db.get("pick_seq", 0) or 0)
 
     # Migración automática: si la sesión venía de una versión anterior,
     # convertimos bultos_pallet/bultos_item a cantidad_bultos/ubicacion.
@@ -1370,6 +1449,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
 def limpiar_mudanza_actual() -> None:
     st.session_state.pick_items = []
     st.session_state.pick_seq = 0
+    guardar_mudanza_actual_db()
 
 
 # -----------------------------
@@ -1412,6 +1492,8 @@ with st.sidebar:
         limpiar_mudanza_actual()
         st.success("Mudanza actual vaciada.")
         st.rerun()
+
+    st.caption(f"Base de avance: {fecha_estado_db('mudanza_actual') or 'sin guardado'}")
 
     st.markdown("---")
     st.subheader("Ejemplos reales")
@@ -1459,12 +1541,14 @@ if uploaded_polo is not None and not df_reimpresion.empty:
         if st.button("Usar control anterior como mudanza activa", type="primary"):
             st.session_state.pick_items = df_reimpresion.to_dict("records")
             st.session_state.pick_seq = int(pd.to_numeric(df_reimpresion["item_id"], errors="coerce").fillna(0).max())
+            guardar_mudanza_actual_db()
             st.success("Mudanza cargada desde el control anterior.")
             st.rerun()
     else:
         if st.button("Reemplazar mudanza actual por control anterior"):
             st.session_state.pick_items = df_reimpresion.to_dict("records")
             st.session_state.pick_seq = int(pd.to_numeric(df_reimpresion["item_id"], errors="coerce").fillna(0).max())
+            guardar_mudanza_actual_db()
             st.success("Mudanza reemplazada por el control anterior.")
             st.rerun()
 
@@ -1555,6 +1639,7 @@ with tab_buscar:
                             validar_stock=False,
                         )
                         if ok:
+                            guardar_mudanza_actual_db()
                             st.success(msg)
                             st.rerun()
                         else:
@@ -1608,6 +1693,7 @@ with tab_buscar:
                             validar_stock=False,
                         )
                         if ok:
+                            guardar_mudanza_actual_db()
                             st.success(msg)
                             st.rerun()
                         else:
@@ -1674,6 +1760,7 @@ with tab_buscar:
                     st.warning("Algunas lineas no se pudieron agregar:")
                     st.write(errores)
                 if agregados:
+                    guardar_mudanza_actual_db()
                     st.rerun()
 
 with tab_pallets:
@@ -1755,6 +1842,7 @@ with tab_pallets:
                 item["cantidad_mudada"] = numero_seguro(row.get("Cantidad mudada", 0), 0)
                 item["codigo_normalizado"] = str(row.get("Código normalizado", "")).strip() or normalizar_codigo(item["articulo"])
                 item["observaciones"] = str(row.get("Observaciones", "")).strip()
+            guardar_mudanza_actual_db()
             st.success("Detalle actualizado.")
             st.rerun()
 
@@ -1858,6 +1946,7 @@ with tab_pallets:
         if st.button("Guardar ubicación"):
             ok, msg = actualizar_ubicacion_item(id_ubicacion, nueva_ubicacion)
             if ok:
+                guardar_mudanza_actual_db()
                 st.success(msg)
                 st.rerun()
             else:
@@ -1915,6 +2004,7 @@ with tab_pallets:
                 stock_darkinel_restante if aplicar_stock_real else None,
             )
             if ok:
+                guardar_mudanza_actual_db()
                 st.success(msg)
                 st.rerun()
             else:
@@ -1926,6 +2016,7 @@ with tab_pallets:
         if st.button("Quitar líneas seleccionadas") and quitar:
             ids = {int(x.split(")", 1)[0]) for x in quitar}
             st.session_state.pick_items = [item for item in st.session_state.pick_items if int(item.get("item_id", 0)) not in ids]
+            guardar_mudanza_actual_db()
             st.success("Líneas quitadas.")
             st.rerun()
 
@@ -2009,6 +2100,7 @@ with tab_recepcion:
                 item["receptor"] = str(receptor_pallet).strip()
                 item["fecha_recepcion"] = ahora_recepcion
                 item["observaciones_recepcion"] = str(row.get("Observaciones recepción", "")).strip()
+            guardar_mudanza_actual_db()
             st.success(f"Pallet {pallet_recepcion} recibido OK y ubicación actualizada.")
             st.rerun()
 
