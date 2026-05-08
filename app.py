@@ -799,21 +799,21 @@ def extraer_columna(df: pd.DataFrame, posibles: List[str]) -> str:
     return ""
 
 
-def leer_base_polo_anterior(file_bytes: bytes, filename: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def leer_base_polo_anterior(file_bytes: bytes, filename: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Lee un archivo generado anteriormente por la app para continuar actualizando Polo."""
     if not file_bytes:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     nombre = filename.lower()
     if not nombre.endswith((".xlsx", ".xlsm", ".xls")):
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     buffer = io.BytesIO(file_bytes)
     engine = "xlrd" if nombre.endswith(".xls") else "openpyxl"
     try:
         xls = pd.ExcelFile(buffer, engine=engine)
     except Exception:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     def read_sheet(preferida: str) -> pd.DataFrame:
         if preferida in xls.sheet_names:
@@ -823,7 +823,48 @@ def leer_base_polo_anterior(file_bytes: bytes, filename: str) -> Tuple[pd.DataFr
     stock_polo = read_sheet("STOCK_POLO_LOGISTICO")
     ubicaciones = read_sheet("UBICACION_POLO_LOGISTICO")
     historial = read_sheet("HISTORIAL_MUDANZAS")
-    return stock_polo, ubicaciones, historial
+    detalle = read_sheet("DETALLE_MUDANZA")
+    return stock_polo, ubicaciones, historial, detalle
+
+
+def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
+    if detalle is None or detalle.empty:
+        return pd.DataFrame()
+
+    col_map = {
+        "Fecha/Hora": "fecha_hora",
+        "Depósito origen": "deposito_origen",
+        "Deposito origen": "deposito_origen",
+        "Depósito destino": "deposito_destino",
+        "Deposito destino": "deposito_destino",
+        "Pallet": "pallet",
+        "Cantidad de bultos": "cantidad_bultos",
+        "Bulto": "bulto",
+        "Ubicación": "ubicacion",
+        "Ubicacion": "ubicacion",
+        "Lectura scanner": "lectura_scanner",
+        "Artículo": "articulo",
+        "Articulo": "articulo",
+        "Descripción": "descripcion",
+        "Descripcion": "descripcion",
+        "Unidad": "unidad",
+        "Cantidad mudada": "cantidad_mudada",
+        "Stock original Darkinel": "stock_total",
+        "Stock restante Darkinel": "stock_restante_darkinel",
+        "Código normalizado": "codigo_normalizado",
+        "Codigo normalizado": "codigo_normalizado",
+        "Observaciones": "observaciones",
+    }
+    normalizados = {normalizar_codigo(k): v for k, v in col_map.items()}
+    salida = pd.DataFrame()
+    for col in detalle.columns:
+        destino = normalizados.get(normalizar_codigo(col))
+        if destino:
+            salida[destino] = detalle[col]
+    if salida.empty:
+        return salida
+    salida["item_id"] = range(1, len(salida) + 1)
+    return normalizar_df_pick(salida)
 
 
 def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFrame) -> pd.DataFrame:
@@ -1405,11 +1446,12 @@ if stock_df.empty:
 stock_consolidado = consolidar_por_codigo(stock_df)
 
 if uploaded_polo is not None:
-    stock_polo_anterior, ubicaciones_anteriores, historial_anterior = leer_base_polo_anterior(uploaded_polo.getvalue(), uploaded_polo.name)
+    stock_polo_anterior, ubicaciones_anteriores, historial_anterior, detalle_mudanza_anterior = leer_base_polo_anterior(uploaded_polo.getvalue(), uploaded_polo.name)
 else:
-    stock_polo_anterior, ubicaciones_anteriores, historial_anterior = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    stock_polo_anterior, ubicaciones_anteriores, historial_anterior, detalle_mudanza_anterior = pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 df_pick = pick_items_df()
+df_reimpresion = detalle_excel_a_pick_items(detalle_mudanza_anterior)
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Códigos con stock", f"{len(stock_consolidado):,}".replace(",", "."))
@@ -1441,16 +1483,22 @@ with tab_buscar:
             if not exactos.empty:
                 st.success(f"Encontré {len(exactos)} artículo(s) con stock consolidado.")
                 st.dataframe(preparar_resultado_para_mostrar(exactos), use_container_width=True, hide_index=True)
+                permitir_agregar_desde_base = True
             else:
                 st.warning("No encontré coincidencia exacta con stock. Te muestro sugerencias posibles.")
                 sugerencias = buscar_sugerencias(stock_consolidado, info["candidatos"])
                 if sugerencias.empty:
                     st.info("No hay sugerencias para esa lectura.")
+                    mejor_puntaje = 0
                 else:
                     st.dataframe(preparar_resultado_para_mostrar(sugerencias), use_container_width=True, hide_index=True)
+                    mejor_puntaje = int(pd.to_numeric(sugerencias.get("puntaje", pd.Series([0])).max(), errors="coerce") or 0)
                 exactos = sugerencias
+                permitir_agregar_desde_base = mejor_puntaje >= 90
+                if not permitir_agregar_desde_base:
+                    st.info("La sugerencia no es suficientemente cercana. Ingresalo manualmente para evitar cargar un artículo equivocado.")
 
-            if not exactos.empty:
+            if permitir_agregar_desde_base and not exactos.empty:
                 st.subheader("Agregar a mudanza")
                 opciones = []
                 exactos_reset = exactos.reset_index(drop=True)
@@ -1497,7 +1545,7 @@ with tab_buscar:
                         else:
                             st.error(msg)
 
-            if exactos.empty:
+            if not permitir_agregar_desde_base:
                 st.subheader("Agregar articulo manual")
                 st.caption("Usalo cuando el articulo no existe en el Excel/base cargada. No descuenta stock de DARKINEL, pero si entra a la mudanza y al POLO.")
                 with st.form("form_agregar_manual"):
@@ -1714,7 +1762,12 @@ with tab_pallets:
 
         st.markdown("---")
         st.subheader("Hoja A4 con codigos de barras")
-        pallets_disponibles = sorted(pd.to_numeric(df_pick["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
+        fuentes_impresion = ["Mudanza actual"]
+        if not df_reimpresion.empty:
+            fuentes_impresion.append("Control anterior cargado")
+        fuente_impresion = st.radio("Origen para imprimir", fuentes_impresion, horizontal=True)
+        df_para_imprimir = df_reimpresion if fuente_impresion == "Control anterior cargado" else df_pick
+        pallets_disponibles = sorted(pd.to_numeric(df_para_imprimir["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
         c_pdf1, c_pdf2, c_pdf3 = st.columns([1, 1, 1.4])
         pallet_pdf = c_pdf1.selectbox("Pallet para imprimir", pallets_disponibles)
         modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por bulto"], horizontal=True)
@@ -1725,7 +1778,7 @@ with tab_pallets:
         )
         modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por bulto" else "pallet"
         if REPORTLAB_DISPONIBLE:
-            pdf_bytes = generar_pdf_pallet_bultos(df_pick, pallet_pdf, modo_pdf_interno, corregir_guion_teclado)
+            pdf_bytes = generar_pdf_pallet_bultos(df_para_imprimir, pallet_pdf, modo_pdf_interno, corregir_guion_teclado)
             st.download_button(
                 "Descargar A4 pallet / bultos PDF",
                 data=pdf_bytes,
@@ -1734,7 +1787,7 @@ with tab_pallets:
                 type="primary",
             )
         else:
-            html_bytes = generar_html_pallet_bultos(df_pick, pallet_pdf, modo_pdf_interno, corregir_guion_teclado)
+            html_bytes = generar_html_pallet_bultos(df_para_imprimir, pallet_pdf, modo_pdf_interno, corregir_guion_teclado)
             st.warning("Reportlab no esta instalado en Streamlit Cloud. Mientras tanto podes descargar esta hoja HTML, abrirla e imprimirla en A4 o guardarla como PDF.")
             st.download_button(
                 "Descargar A4 imprimible HTML",
@@ -1745,6 +1798,34 @@ with tab_pallets:
             )
     else:
         st.info("Todavía no hay artículos agregados a la mudanza.")
+
+        if not df_reimpresion.empty:
+            st.markdown("---")
+            st.subheader("Reimprimir hojas A4 de control anterior")
+            pallets_disponibles = sorted(pd.to_numeric(df_reimpresion["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
+            c_pdf1, c_pdf2, c_pdf3 = st.columns([1, 1, 1.4])
+            pallet_pdf = c_pdf1.selectbox("Pallet para reimprimir", pallets_disponibles)
+            modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por bulto"], horizontal=True, key="modo_reimprimir_anterior")
+            corregir_guion_teclado = c_pdf3.checkbox("Corregir guion del lector", value=True, key="guion_reimprimir_anterior")
+            modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por bulto" else "pallet"
+            if REPORTLAB_DISPONIBLE:
+                pdf_bytes = generar_pdf_pallet_bultos(df_reimpresion, pallet_pdf, modo_pdf_interno, corregir_guion_teclado)
+                st.download_button(
+                    "Descargar A4 pallet / bultos PDF",
+                    data=pdf_bytes,
+                    file_name=f"pallet_{int(pallet_pdf)}_{modo_pdf_interno}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                )
+            else:
+                html_bytes = generar_html_pallet_bultos(df_reimpresion, pallet_pdf, modo_pdf_interno, corregir_guion_teclado)
+                st.download_button(
+                    "Descargar A4 imprimible HTML",
+                    data=html_bytes,
+                    file_name=f"pallet_{int(pallet_pdf)}_{modo_pdf_interno}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+                    mime="text/html",
+                    type="primary",
+                )
 
     st.markdown("---")
     st.subheader("Completar ubicación al llegar al Polo")
