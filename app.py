@@ -996,7 +996,6 @@ def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "
     trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
     cantidad_bultos = int(pd.to_numeric(trabajo["cantidad_bultos"], errors="coerce").fillna(1).max())
     unidades = formatear_numero(trabajo["cantidad_mudada"].sum())
-    codigos_distintos = int(trabajo["codigo_normalizado"].nunique())
     fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
     paginas = list(range(1, cantidad_bultos + 1)) if modo == "bultos" else [None]
 
@@ -1028,7 +1027,6 @@ def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "
                     <div class="title">PALLET {int(pallet)}</div>
                     <div class="meta">
                         <strong>{subtitulo}</strong><br>
-                        Codigos: {codigos_distintos}<br>
                         Unidades: {unidades}<br>
                         Fecha: {_html_escape(fecha)}
                     </div>
@@ -1090,7 +1088,6 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
     trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
     cantidad_bultos = int(pd.to_numeric(trabajo["cantidad_bultos"], errors="coerce").fillna(1).max())
     unidades = formatear_numero(trabajo["cantidad_mudada"].sum())
-    codigos_distintos = int(trabajo["codigo_normalizado"].nunique())
     fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
 
     output = io.BytesIO()
@@ -1103,6 +1100,8 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
         bottomMargin=10 * mm,
     )
     styles = getSampleStyleSheet()
+    barcode_text_style = styles["Normal"].clone("BarcodeText")
+    barcode_text_style.alignment = 1
     story = []
 
     paginas = list(range(1, cantidad_bultos + 1)) if modo == "bultos" else [None]
@@ -1115,7 +1114,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
             [
                 [
                     Paragraph(f"<b>{titulo}</b>", styles["Title"]),
-                    Paragraph(f"<b>{subtitulo}</b><br/>Codigos: {codigos_distintos}<br/>Unidades: {unidades}<br/>Fecha: {fecha}", styles["Normal"]),
+                    Paragraph(f"<b>{subtitulo}</b><br/>Unidades: {unidades}<br/>Fecha: {fecha}", styles["Normal"]),
                 ]
             ],
             colWidths=[95 * mm, 95 * mm],
@@ -1148,7 +1147,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
                     Paragraph(articulo, styles["Normal"]),
                     Paragraph(descripcion[:80], styles["Normal"]),
                     Paragraph(str(cantidad), styles["Normal"]),
-                    [_barcode_articulo_flowable(codigo_barra), Paragraph(articulo, styles["Normal"])],
+                    [_barcode_articulo_flowable(codigo_barra), Paragraph(articulo, barcode_text_style)],
                 ]
             )
 
@@ -1163,6 +1162,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
                     ("BACKGROUND", (0, 0), (-1, 0), colors.black),
                     ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("ALIGN", (3, 1), (3, -1), "CENTER"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 4),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 4),
