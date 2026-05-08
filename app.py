@@ -456,6 +456,12 @@ def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
         "stock_total": 0,
         "codigo_normalizado": "",
         "observaciones": "",
+        "cantidad_recibida": None,
+        "recepcion_ok": False,
+        "ubicacion_recepcion": "",
+        "receptor": "",
+        "fecha_recepcion": "",
+        "observaciones_recepcion": "",
     }
     for col, default in defaults.items():
         if col not in trabajo.columns:
@@ -465,9 +471,13 @@ def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
     trabajo["pallet"] = pd.to_numeric(trabajo["pallet"], errors="coerce").fillna(1).astype(int)
     trabajo["bulto"] = pd.to_numeric(trabajo["bulto"], errors="coerce").fillna(1).astype(int)
     trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
+    trabajo["cantidad_recibida"] = pd.to_numeric(trabajo["cantidad_recibida"], errors="coerce")
+    trabajo["cantidad_recibida"] = trabajo["cantidad_recibida"].fillna(trabajo["cantidad_mudada"])
     trabajo["stock_total"] = pd.to_numeric(trabajo["stock_total"], errors="coerce").fillna(0)
     trabajo["ubicacion"] = trabajo["ubicacion"].fillna("").astype(str).str.strip().str.upper()
     trabajo.loc[trabajo["ubicacion"] == "", "ubicacion"] = "PENDIENTE"
+    trabajo["ubicacion_recepcion"] = trabajo["ubicacion_recepcion"].fillna("").astype(str).str.strip().str.upper()
+    trabajo["recepcion_ok"] = trabajo["recepcion_ok"].fillna(False).astype(bool)
     return trabajo
 
 def agregar_item_a_mudanza(
@@ -519,6 +529,12 @@ def agregar_item_a_mudanza(
             "stock_total": stock_total,
             "codigo_normalizado": codigo_norm,
             "observaciones": observaciones.strip(),
+            "cantidad_recibida": float(cantidad_mudada),
+            "recepcion_ok": False,
+            "ubicacion_recepcion": "",
+            "receptor": "",
+            "fecha_recepcion": "",
+            "observaciones_recepcion": "",
         }
     )
     return True, "Artículo agregado a la mudanza."
@@ -904,6 +920,67 @@ def historial_mudanzas(df_pick: pd.DataFrame, historial_anterior: pd.DataFrame) 
     return actual
 
 
+def preparar_recepcion_polo(df_pick: pd.DataFrame) -> pd.DataFrame:
+    if df_pick.empty:
+        return pd.DataFrame(
+            columns=[
+                "Fecha recepción",
+                "Receptor",
+                "OK recepción",
+                "Pallet",
+                "Bulto",
+                "Ubicación informada",
+                "Artículo",
+                "Descripción",
+                "Unidad",
+                "Cantidad mudada",
+                "Cantidad recibida",
+                "Diferencia",
+                "Código normalizado",
+                "Observaciones recepción",
+            ]
+        )
+
+    trabajo = normalizar_df_pick(df_pick)
+    recepcion = trabajo.copy()
+    recepcion["diferencia"] = pd.to_numeric(recepcion["cantidad_recibida"], errors="coerce").fillna(0) - pd.to_numeric(recepcion["cantidad_mudada"], errors="coerce").fillna(0)
+    return recepcion[
+        [
+            "fecha_recepcion",
+            "receptor",
+            "recepcion_ok",
+            "pallet",
+            "bulto",
+            "ubicacion_recepcion",
+            "articulo",
+            "descripcion",
+            "unidad",
+            "cantidad_mudada",
+            "cantidad_recibida",
+            "diferencia",
+            "codigo_normalizado",
+            "observaciones_recepcion",
+        ]
+    ].rename(
+        columns={
+            "fecha_recepcion": "Fecha recepción",
+            "receptor": "Receptor",
+            "recepcion_ok": "OK recepción",
+            "pallet": "Pallet",
+            "bulto": "Bulto",
+            "ubicacion_recepcion": "Ubicación informada",
+            "articulo": "Artículo",
+            "descripcion": "Descripción",
+            "unidad": "Unidad",
+            "cantidad_mudada": "Cantidad mudada",
+            "cantidad_recibida": "Cantidad recibida",
+            "diferencia": "Diferencia",
+            "codigo_normalizado": "Código normalizado",
+            "observaciones_recepcion": "Observaciones recepción",
+        }
+    )
+
+
 def generar_excel_control(
     stock_consolidado: pd.DataFrame,
     df_pick: pd.DataFrame,
@@ -917,6 +994,7 @@ def generar_excel_control(
     historial = historial_mudanzas(df_pick, historial_anterior)
     resumen = resumen_pallets(df_pick)
     detalle = preparar_detalle_mudanza(df_pick)
+    recepcion = preparar_recepcion_polo(df_pick)
 
     resumen_depositos = pd.DataFrame(
         [
@@ -939,6 +1017,7 @@ def generar_excel_control(
         polo.to_excel(writer, index=False, sheet_name="STOCK_POLO_LOGISTICO")
         ubicacion.to_excel(writer, index=False, sheet_name="UBICACION_POLO_LOGISTICO")
         historial.to_excel(writer, index=False, sheet_name="HISTORIAL_MUDANZAS")
+        recepcion.to_excel(writer, index=False, sheet_name="RECEPCION_POLO")
         resumen.to_excel(writer, index=False, sheet_name="COMPOSICION_PALLETS")
         detalle.to_excel(writer, index=False, sheet_name="DETALLE_MUDANZA")
         resumen_depositos.to_excel(writer, index=False, sheet_name="RESUMEN_DEPOSITOS")
@@ -1340,8 +1419,8 @@ col4.metric("Unidades a mudar", f"{int(pd.to_numeric(df_pick.get('cantidad_mudad
 
 st.markdown("---")
 
-tab_buscar, tab_pallets, tab_bases, tab_stock = st.tabs(
-    ["1) Buscar y pickear", "2) Pallets / mudanza", "3) Bases actualizadas", "4) Stock limpio"]
+tab_buscar, tab_pallets, tab_recepcion, tab_bases, tab_stock = st.tabs(
+    ["1) Buscar y pickear", "2) Pallets / mudanza", "3) Recepción Polo", "4) Bases actualizadas", "5) Stock limpio"]
 )
 
 with tab_buscar:
@@ -1753,6 +1832,84 @@ with tab_pallets:
             st.session_state.pick_items = [item for item in st.session_state.pick_items if int(item.get("item_id", 0)) not in ids]
             st.success("Líneas quitadas.")
             st.rerun()
+
+with tab_recepcion:
+    st.subheader("Recepción en Polo")
+    if df_pick.empty:
+        st.info("Todavía no hay artículos en la mudanza para recibir.")
+    else:
+        st.caption("El receptor confirma cantidades y ubicación. Al guardar, la ubicación informada actualiza la mudanza y las bases.")
+        recepcion_editor = normalizar_df_pick(df_pick)[
+            [
+                "item_id",
+                "pallet",
+                "bulto",
+                "articulo",
+                "descripcion",
+                "unidad",
+                "cantidad_mudada",
+                "cantidad_recibida",
+                "recepcion_ok",
+                "ubicacion_recepcion",
+                "receptor",
+                "fecha_recepcion",
+                "observaciones_recepcion",
+            ]
+        ].rename(
+            columns={
+                "item_id": "ID",
+                "pallet": "Pallet",
+                "bulto": "Bulto",
+                "articulo": "Artículo",
+                "descripcion": "Descripción",
+                "unidad": "Unidad",
+                "cantidad_mudada": "Cantidad mudada",
+                "cantidad_recibida": "Cantidad recibida",
+                "recepcion_ok": "OK recepción",
+                "ubicacion_recepcion": "Ubicación Polo",
+                "receptor": "Recibido por",
+                "fecha_recepcion": "Fecha recepción",
+                "observaciones_recepcion": "Observaciones recepción",
+            }
+        )
+
+        recepcion_editada = st.data_editor(
+            recepcion_editor,
+            use_container_width=True,
+            hide_index=True,
+            disabled=["ID", "Pallet", "Bulto", "Artículo", "Descripción", "Unidad", "Cantidad mudada"],
+            num_rows="fixed",
+            key="recepcion_polo_editor",
+        )
+
+        if st.button("Guardar recepción Polo", type="primary"):
+            por_id = {int(item.get("item_id", 0)): item for item in st.session_state.pick_items}
+            ahora_recepcion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for row in recepcion_editada.to_dict("records"):
+                item_id = int(row.get("ID", 0))
+                item = por_id.get(item_id)
+                if not item:
+                    continue
+                ubicacion_polo = str(row.get("Ubicación Polo", "")).strip().upper()
+                item["cantidad_recibida"] = numero_seguro(row.get("Cantidad recibida", item.get("cantidad_mudada", 0)), 0)
+                item["recepcion_ok"] = bool(row.get("OK recepción", False))
+                item["ubicacion_recepcion"] = ubicacion_polo
+                if ubicacion_polo:
+                    item["ubicacion"] = ubicacion_polo
+                item["receptor"] = str(row.get("Recibido por", "")).strip()
+                item["fecha_recepcion"] = str(row.get("Fecha recepción", "")).strip() or ahora_recepcion
+                item["observaciones_recepcion"] = str(row.get("Observaciones recepción", "")).strip()
+            st.success("Recepción guardada y ubicación actualizada.")
+            st.rerun()
+
+        recepcion_actual = preparar_recepcion_polo(df_pick)
+        if not recepcion_actual.empty:
+            pendientes = int((~recepcion_actual["OK recepción"].astype(bool)).sum())
+            diferencias = int((pd.to_numeric(recepcion_actual["Diferencia"], errors="coerce").fillna(0) != 0).sum())
+            r1, r2, r3 = st.columns(3)
+            r1.metric("Líneas recibidas OK", len(recepcion_actual) - pendientes)
+            r2.metric("Líneas pendientes", pendientes)
+            r3.metric("Diferencias cantidad", diferencias)
 
 with tab_bases:
     st.subheader("STOCK_DARKINEL_ACTUALIZADO")
