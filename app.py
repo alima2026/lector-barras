@@ -1403,6 +1403,11 @@ def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "
     for bulto in paginas:
         trabajo_pagina = trabajo[trabajo["cantidades_bulto"].map(lambda x: cantidad_en_bulto(x, int(bulto)) > 0)].copy() if bulto is not None else trabajo
         subtitulo = f"BULTO {bulto} DE {cantidad_bultos}" if bulto is not None else f"BULTOS: {cantidad_bultos}"
+        unidades_pagina = (
+            formatear_numero(trabajo_pagina["cantidades_bulto"].map(lambda x: cantidad_en_bulto(x, int(bulto))).sum())
+            if bulto is not None
+            else unidades
+        )
         filas_html = []
         for r in trabajo_pagina.sort_values(["articulo", "descripcion"]).itertuples():
             articulo = str(getattr(r, "articulo", "")).strip()
@@ -1427,7 +1432,7 @@ def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "
                     <div class="title">PALLET {int(pallet)}</div>
                     <div class="meta">
                         <strong>{subtitulo}</strong><br>
-                        Unidades: {unidades}<br>
+                        Unidades: {unidades_pagina}<br>
                         Fecha: {_html_escape(fecha)}
                     </div>
                 </header>
@@ -1509,12 +1514,18 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
     for idx, bulto in enumerate(paginas):
         titulo = f"PALLET {int(pallet)}"
         subtitulo = f"BULTO {bulto} DE {cantidad_bultos}" if bulto is not None else f"BULTOS: {cantidad_bultos}"
+        trabajo_pagina = trabajo[trabajo["cantidades_bulto"].map(lambda x: cantidad_en_bulto(x, int(bulto)) > 0)].copy() if bulto is not None else trabajo
+        unidades_pagina = (
+            formatear_numero(trabajo_pagina["cantidades_bulto"].map(lambda x: cantidad_en_bulto(x, int(bulto))).sum())
+            if bulto is not None
+            else unidades
+        )
 
         header = Table(
             [
                 [
                     Paragraph(f"<b>{titulo}</b>", styles["Title"]),
-                    Paragraph(f"<b>{subtitulo}</b><br/>Unidades: {unidades}<br/>Fecha: {fecha}", styles["Normal"]),
+                    Paragraph(f"<b>{subtitulo}</b><br/>Unidades: {unidades_pagina}<br/>Fecha: {fecha}", styles["Normal"]),
                 ]
             ],
             colWidths=[95 * mm, 95 * mm],
@@ -1535,7 +1546,6 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
         story.append(header)
         story.append(Spacer(1, 6 * mm))
 
-        trabajo_pagina = trabajo[trabajo["cantidades_bulto"].map(lambda x: cantidad_en_bulto(x, int(bulto)) > 0)].copy() if bulto is not None else trabajo
         rows = [["Articulo", "Descripcion", "Cant.", "Codigo de barras"]]
         for r in trabajo_pagina.sort_values(["articulo", "descripcion"]).itertuples():
             articulo = str(getattr(r, "articulo", "")).strip()
