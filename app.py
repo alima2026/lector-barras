@@ -1453,6 +1453,21 @@ else:
 df_pick = pick_items_df()
 df_reimpresion = detalle_excel_a_pick_items(detalle_mudanza_anterior)
 
+if uploaded_polo is not None and not df_reimpresion.empty:
+    st.info(f"El control anterior cargado trae {len(df_reimpresion)} línea(s) de mudanza.")
+    if df_pick.empty:
+        if st.button("Usar control anterior como mudanza activa", type="primary"):
+            st.session_state.pick_items = df_reimpresion.to_dict("records")
+            st.session_state.pick_seq = int(pd.to_numeric(df_reimpresion["item_id"], errors="coerce").fillna(0).max())
+            st.success("Mudanza cargada desde el control anterior.")
+            st.rerun()
+    else:
+        if st.button("Reemplazar mudanza actual por control anterior"):
+            st.session_state.pick_items = df_reimpresion.to_dict("records")
+            st.session_state.pick_seq = int(pd.to_numeric(df_reimpresion["item_id"], errors="coerce").fillna(0).max())
+            st.success("Mudanza reemplazada por el control anterior.")
+            st.rerun()
+
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Códigos con stock", f"{len(stock_consolidado):,}".replace(",", "."))
 col2.metric("Stock total DARKINEL", f"{int(pd.to_numeric(stock_consolidado['cantidad'], errors='coerce').fillna(0).sum()):,}".replace(",", "."))
