@@ -62,6 +62,31 @@ def formatear_numero(x):
         return x
 
 
+def formatear_fila_origen(valor) -> str:
+    """Convierte fila_origen a texto sin romper si ya viene como "12, 15"."""
+    if pd.isna(valor):
+        return ""
+    try:
+        fx = float(valor)
+        return str(int(fx)) if fx.is_integer() else str(fx)
+    except Exception:
+        return str(valor).strip()
+
+
+def unir_filas_origen(serie: pd.Series) -> str:
+    """Une filas de origen soportando números y textos ya consolidados."""
+    valores = []
+    for valor in serie:
+        texto = formatear_fila_origen(valor)
+        if not texto:
+            continue
+        for parte in re.split(r"[,;/]+", texto):
+            parte = parte.strip()
+            if parte and parte not in valores:
+                valores.append(parte)
+    return ", ".join(valores)
+
+
 def extraer_candidatos_mazda(codigo_leido: str) -> Dict[str, object]:
     """
     Recibe la lectura cruda del scanner y genera candidatos de búsqueda.
@@ -260,10 +285,13 @@ def consolidar_por_codigo(df: pd.DataFrame) -> pd.DataFrame:
     if "puntaje" in trabajo.columns:
         agregaciones["puntaje"] = "max"
     if "fila_origen" in trabajo.columns:
-        agregaciones["fila_origen"] = lambda s: ", ".join(str(int(x)) for x in s if pd.notna(x))
+        agregaciones["fila_origen"] = unir_filas_origen
+    if "lineas_sumadas" in trabajo.columns:
+        agregaciones["lineas_sumadas"] = lambda s: int(pd.to_numeric(s, errors="coerce").fillna(0).sum())
 
     agrupado = trabajo.groupby("codigo_normalizado", as_index=False).agg(agregaciones)
-    agrupado["lineas_sumadas"] = trabajo.groupby("codigo_normalizado").size().values
+    if "lineas_sumadas" not in agrupado.columns:
+        agrupado["lineas_sumadas"] = trabajo.groupby("codigo_normalizado").size().values
     agrupado["cantidad"] = agrupado["cantidad"].apply(formatear_numero)
     return agrupado
 
