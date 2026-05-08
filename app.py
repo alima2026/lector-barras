@@ -1042,8 +1042,13 @@ with tab_buscar:
     else:
         codigos_texto = st.text_area("Pegá varios códigos, uno por línea", height=160)
         st.caption("En este modo la app busca y muestra el primer match de cada línea. Para registrar ubicación exacta, conviene agregar de a un código.")
-        if st.button("Buscar varios") and codigos_texto.strip():
+        col_buscar_varios, col_agregar_varios = st.columns([1, 2])
+        buscar_varios = col_buscar_varios.button("Buscar varios")
+        agregar_varios = col_agregar_varios.button("Buscar y agregar a mudanza", type="primary")
+        if (buscar_varios or agregar_varios) and codigos_texto.strip():
             filas = []
+            agregados = 0
+            errores = []
             for linea in codigos_texto.splitlines():
                 linea = linea.strip()
                 if not linea:
@@ -1069,7 +1074,31 @@ with tab_buscar:
                             "Stock total": row.get("cantidad", ""),
                         }
                     )
+                    if agregar_varios:
+                        ok, msg = agregar_item_a_mudanza(
+                            lectura_original=linea,
+                            row=row,
+                            cantidad_mudada=1,
+                            pallet=int(pallet_activo),
+                            cantidad_bultos=int(cantidad_bultos_activo),
+                            ubicacion=ubicacion_default,
+                            deposito_origen=deposito_origen,
+                            deposito_destino=deposito_destino,
+                            observaciones="Carga masiva",
+                        )
+                        if ok:
+                            agregados += 1
+                        else:
+                            errores.append(f"{linea}: {msg}")
             st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
+            if agregar_varios:
+                if agregados:
+                    st.success(f"Agregue {agregados} articulo(s) a la mudanza.")
+                if errores:
+                    st.warning("Algunas lineas no se pudieron agregar:")
+                    st.write(errores)
+                if agregados:
+                    st.rerun()
 
 with tab_pallets:
     st.subheader("Composición por pallet")
