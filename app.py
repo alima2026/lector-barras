@@ -191,8 +191,9 @@ def parsear_cantidades_por_bulto(valor, cantidad_total: float = 0, bulto_default
         else:
             bulto_txt, cant_txt = parte, ""
 
-        bultos_txt = bulto_txt.strip()
-        cantidad = numero_seguro(cant_txt, 0) if cant_txt.strip() else 0
+        bultos_txt = re.sub(r"\bCAJA\b", "", bulto_txt.strip(), flags=re.IGNORECASE).strip()
+        cant_limpia = re.sub(r"\bCANTIDAD\b", "", cant_txt.strip(), flags=re.IGNORECASE).strip()
+        cantidad = numero_seguro(cant_limpia, 0) if cant_limpia else 0
 
         bultos = []
         if "-" in bultos_txt:
@@ -220,7 +221,7 @@ def normalizar_cantidades_por_bulto(valor, cantidad_total: float = 0, bulto_defa
     distribucion = parsear_cantidades_por_bulto(valor, cantidad_total, bulto_default)
     if not distribucion:
         return ""
-    return ", ".join(f"{bulto}={formatear_numero(cantidad)}" for bulto, cantidad in sorted(distribucion.items()))
+    return ", ".join(f"Caja {bulto} = Cantidad {formatear_numero(cantidad)}" for bulto, cantidad in sorted(distribucion.items()))
 
 
 def cantidad_en_bulto(valor, bulto: int, cantidad_total: float = 0) -> float:
@@ -832,7 +833,7 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
                 "Cantidad de cajas",
                 "Caja",
                 "Cajas del item",
-                "Piezas por caja",
+                "Caja = Cantidad",
                 "Ubicación",
                 "Lectura scanner",
                 "Artículo",
@@ -878,7 +879,7 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
             "cantidad_bultos": "Cantidad de cajas",
             "bulto": "Caja",
             "bultos_item": "Cajas del item",
-            "cantidades_bulto": "Piezas por caja",
+            "cantidades_bulto": "Caja = Cantidad",
             "ubicacion": "Ubicación",
             "lectura_scanner": "Lectura scanner",
             "articulo": "Artículo",
@@ -1056,6 +1057,7 @@ def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
         "Cajas del ítem": "bultos_item",
         "Bultos del item": "bultos_item",
         "Bultos del ítem": "bultos_item",
+        "Caja = Cantidad": "cantidades_bulto",
         "Piezas por caja": "cantidades_bulto",
         "Cantidades por bulto": "cantidades_bulto",
         "Ubicación": "ubicacion",
@@ -1770,7 +1772,7 @@ with tab_buscar:
                         pallet = c2.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1)
                         cantidad_bultos = c3.number_input("Cantidad de cajas", min_value=1, value=int(cantidad_bultos_activo), step=1)
                         bulto = c4.number_input("Caja", min_value=1, max_value=int(cantidad_bultos), value=min(int(bulto_activo), int(cantidad_bultos)), step=1)
-                        cantidades_bulto = c5.text_input("Piezas por caja", value=f"{int(bulto)}={formatear_numero(cantidad_mudar)}", help="Ej: 1=8, 3=4")
+                        cantidades_bulto = c5.text_input("Caja = Cantidad", value=f"Caja {int(bulto)} = Cantidad {formatear_numero(cantidad_mudar)}", help="Ej: Caja 1 = Cantidad 8, Caja 3 = Cantidad 4")
                         ubicacion = c6.text_input("Ubicación en Polo", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
                         observaciones = st.text_input("Observaciones", placeholder="Opcional")
                         submit = st.form_submit_button("Agregar a mudanza", type="primary")
@@ -1813,7 +1815,7 @@ with tab_buscar:
                     pallet_manual = m6.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1, key="pallet_manual")
                     cantidad_bultos_manual = m7.number_input("Cantidad de cajas", min_value=1, value=int(cantidad_bultos_activo), step=1, key="cantidad_bultos_manual")
                     bulto_manual = m8.number_input("Caja", min_value=1, max_value=int(cantidad_bultos_manual), value=min(int(bulto_activo), int(cantidad_bultos_manual)), step=1, key="bulto_manual")
-                    cantidades_bulto_manual = m9.text_input("Piezas por caja", value=f"{int(bulto_manual)}={formatear_numero(cantidad_manual)}", help="Ej: 1=8, 3=4")
+                    cantidades_bulto_manual = m9.text_input("Caja = Cantidad", value=f"Caja {int(bulto_manual)} = Cantidad {formatear_numero(cantidad_manual)}", help="Ej: Caja 1 = Cantidad 8, Caja 3 = Cantidad 4")
                     ubicacion_manual = m10.text_input("Ubicacion", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
                     observaciones_manual = st.text_input("Observaciones manual", value="Articulo agregado manualmente")
                     submit_manual = st.form_submit_button("Agregar manual a mudanza", type="primary")
@@ -1899,7 +1901,7 @@ with tab_buscar:
                             cantidad_bultos=int(cantidad_bultos_activo),
                             bulto=int(bulto_activo),
                             bultos_item=str(bulto_activo),
-                            cantidades_bulto=f"{int(bulto_activo)}=1",
+                            cantidades_bulto=f"Caja {int(bulto_activo)} = Cantidad 1",
                             ubicacion=ubicacion_default,
                             deposito_origen=deposito_origen,
                             deposito_destino=deposito_destino,
@@ -1962,7 +1964,7 @@ with tab_pallets:
                 "cantidad_bultos": "Cantidad de cajas",
                 "bulto": "Caja",
                 "bultos_item": "Cajas del item",
-                "cantidades_bulto": "Piezas por caja",
+                "cantidades_bulto": "Caja = Cantidad",
                 "ubicacion": "Ubicación",
                 "lectura_scanner": "Lectura scanner",
                 "articulo": "Artículo",
@@ -1997,7 +1999,7 @@ with tab_pallets:
                 item["cantidad_bultos"] = entero_seguro(row.get("Cantidad de cajas", row.get("Cantidad de bultos", 1)), 1)
                 item["bulto"] = max(1, min(entero_seguro(row.get("Caja", row.get("Bulto", 1)), 1), int(item["cantidad_bultos"])))
                 piezas_enviadas = row.get("Piezas enviadas", row.get("Cantidad mudada", 0))
-                item["cantidades_bulto"] = normalizar_cantidades_por_bulto(row.get("Piezas por caja", row.get("Cantidades por bulto", "")), piezas_enviadas, item["bulto"])
+                item["cantidades_bulto"] = normalizar_cantidades_por_bulto(row.get("Caja = Cantidad", row.get("Piezas por caja", row.get("Cantidades por bulto", ""))), piezas_enviadas, item["bulto"])
                 item["bultos_item"] = bultos_desde_distribucion(item["cantidades_bulto"], piezas_enviadas, item["bulto"])
                 item["ubicacion"] = str(row.get("Ubicación", "")).strip().upper() or "PENDIENTE"
                 item["lectura_scanner"] = str(row.get("Lectura scanner", "")).strip()
@@ -2144,7 +2146,7 @@ with tab_pallets:
             nuevo_pallet = e2.number_input("Pallet", min_value=1, value=pallet_actual, step=1)
             nueva_cantidad_bultos = e3.number_input("Cantidad de cajas", min_value=1, value=cantidad_bultos_actual, step=1)
             nuevo_bulto = e4.number_input("Caja", min_value=1, max_value=int(nueva_cantidad_bultos), value=min(bulto_actual, int(nueva_cantidad_bultos)), step=1)
-            nuevas_cantidades_bulto = e5.text_input("Piezas por caja", value=cantidades_bulto_actual, help="Ej: 1=8, 3=4")
+            nuevas_cantidades_bulto = e5.text_input("Caja = Cantidad", value=cantidades_bulto_actual, help="Ej: Caja 1 = Cantidad 8, Caja 3 = Cantidad 4")
             nueva_ubicacion_editar = e6.text_input("Ubicación", value="" if ubicacion_actual_editar == "PENDIENTE" else ubicacion_actual_editar)
 
             aplicar_stock_real = st.checkbox(
