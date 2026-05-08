@@ -351,6 +351,14 @@ def inicializar_estado() -> None:
     if "pick_seq" not in st.session_state:
         st.session_state.pick_seq = 0
 
+    # Migración automática: si la sesión venía de una versión anterior,
+    # convertimos bultos_pallet/bultos_item a cantidad_bultos/ubicacion.
+    for item in st.session_state.pick_items:
+        if "cantidad_bultos" not in item:
+            item["cantidad_bultos"] = item.get("bultos_pallet", 1)
+        if "ubicacion" not in item:
+            item["ubicacion"] = str(item.get("bultos_item", "")).strip().upper()
+
 
 def cantidad_pickeada_por_codigo(codigo_normalizado: str) -> float:
     total = 0.0
@@ -359,6 +367,60 @@ def cantidad_pickeada_por_codigo(codigo_normalizado: str) -> float:
             total += float(item.get("cantidad_mudada", 0) or 0)
     return total
 
+
+
+def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Deja la mudanza con las columnas nuevas aunque la sesión tenga datos viejos.
+    Evita errores cuando antes existían columnas como bultos_pallet o bultos_item.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    trabajo = df.copy()
+
+    # Compatibilidad con la versión anterior de la app.
+    if "cantidad_bultos" not in trabajo.columns:
+        if "bultos_pallet" in trabajo.columns:
+            trabajo["cantidad_bultos"] = trabajo["bultos_pallet"]
+        elif "Bultos del pallet" in trabajo.columns:
+            trabajo["cantidad_bultos"] = trabajo["Bultos del pallet"]
+        else:
+            trabajo["cantidad_bultos"] = 1
+
+    if "ubicacion" not in trabajo.columns:
+        if "bultos_item" in trabajo.columns:
+            trabajo["ubicacion"] = trabajo["bultos_item"]
+        elif "Bulto(s) del artículo" in trabajo.columns:
+            trabajo["ubicacion"] = trabajo["Bulto(s) del artículo"]
+        else:
+            trabajo["ubicacion"] = ""
+
+    defaults = {
+        "fecha_hora": "",
+        "deposito_origen": "DARKINEL",
+        "deposito_destino": "POLO LOGISTICO",
+        "pallet": 1,
+        "lectura_scanner": "",
+        "articulo": "",
+        "descripcion": "",
+        "estado": "",
+        "unidad": "",
+        "cantidad_mudada": 0,
+        "stock_total": 0,
+        "codigo_normalizado": "",
+        "observaciones": "",
+    }
+    for col, default in defaults.items():
+        if col not in trabajo.columns:
+            trabajo[col] = default
+
+    trabajo["cantidad_bultos"] = pd.to_numeric(trabajo["cantidad_bultos"], errors="coerce").fillna(1).astype(int)
+    trabajo["pallet"] = pd.to_numeric(trabajo["pallet"], errors="coerce").fillna(1).astype(int)
+    trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
+    trabajo["stock_total"] = pd.to_numeric(trabajo["stock_total"], errors="coerce").fillna(0)
+    trabajo["ubicacion"] = trabajo["ubicacion"].fillna("").astype(str).str.strip().str.upper()
+    return trabajo
 
 def agregar_item_a_mudanza(
     lectura_original: str,
@@ -418,8 +480,7 @@ def pick_items_df() -> pd.DataFrame:
     df = pd.DataFrame(st.session_state.pick_items)
     if df.empty:
         return df
-    df["cantidad_mudada"] = pd.to_numeric(df["cantidad_mudada"], errors="coerce").fillna(0)
-    df["stock_total"] = pd.to_numeric(df["stock_total"], errors="coerce").fillna(0)
+    df = normalizar_df_pick(df)
     total_por_codigo = df.groupby("codigo_normalizado")["cantidad_mudada"].transform("sum")
     df["stock_restante_darkinel"] = df["stock_total"] - total_por_codigo
     for col in ["cantidad_mudada", "stock_total", "stock_restante_darkinel"]:
@@ -430,7 +491,7 @@ def pick_items_df() -> pd.DataFrame:
 def mudado_por_codigo(df_pick: pd.DataFrame) -> pd.DataFrame:
     if df_pick.empty:
         return pd.DataFrame(columns=["codigo_normalizado", "mudado_al_polo"])
-    trabajo = df_pick.copy()
+    trabajo = normalizar_df_pick(df_pick)
     trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
     return (
         trabajo.groupby("codigo_normalizado", as_index=False)
@@ -459,6 +520,8 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
                 "Observaciones",
             ]
         )
+
+    df = normalizar_df_pick(df)
 
     cols = [
         "fecha_hora",
@@ -515,8 +578,7 @@ def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
             ]
         )
 
-    trabajo = df.copy()
-    trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
+    trabajo = normalizar_df_pick(df)
     resumen = (
         trabajo.groupby(["deposito_origen", "deposito_destino", "pallet", "cantidad_bultos"], dropna=False)
         .agg(
@@ -627,8 +689,7 @@ def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFr
     nuevos = pd.DataFrame(columns=columnas)
 
     if not df_pick.empty:
-        trabajo = df_pick.copy()
-        trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
+        trabajo = normalizar_df_pick(df_pick)
         nuevos = (
             trabajo.groupby("codigo_normalizado", as_index=False)
             .agg(
