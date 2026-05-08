@@ -829,16 +829,16 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
                 "Depósito origen",
                 "Depósito destino",
                 "Pallet",
-                "Cantidad de bultos",
-                "Bulto",
-                "Bultos del item",
-                "Cantidades por bulto",
+                "Cantidad de cajas",
+                "Caja",
+                "Cajas del item",
+                "Piezas por caja",
                 "Ubicación",
                 "Lectura scanner",
                 "Artículo",
                 "Descripción",
                 "Unidad",
-                "Cantidad mudada",
+                "Piezas enviadas",
                 "Stock original Darkinel",
                 "Stock restante Darkinel",
                 "Código normalizado",
@@ -875,16 +875,16 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
             "deposito_origen": "Depósito origen",
             "deposito_destino": "Depósito destino",
             "pallet": "Pallet",
-            "cantidad_bultos": "Cantidad de bultos",
-            "bulto": "Bulto",
-            "bultos_item": "Bultos del item",
-            "cantidades_bulto": "Cantidades por bulto",
+            "cantidad_bultos": "Cantidad de cajas",
+            "bulto": "Caja",
+            "bultos_item": "Cajas del item",
+            "cantidades_bulto": "Piezas por caja",
             "ubicacion": "Ubicación",
             "lectura_scanner": "Lectura scanner",
             "articulo": "Artículo",
             "descripcion": "Descripción",
             "unidad": "Unidad",
-            "cantidad_mudada": "Cantidad mudada",
+            "cantidad_mudada": "Piezas enviadas",
             "stock_total": "Stock original Darkinel",
             "stock_restante_darkinel": "Stock restante Darkinel",
             "codigo_normalizado": "Código normalizado",
@@ -900,10 +900,10 @@ def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
                 "Depósito origen",
                 "Depósito destino",
                 "Pallet",
-                "Cantidad de bultos",
+                "Cantidad de cajas",
                 "Ubicaciones",
                 "Cantidad de códigos diferentes",
-                "Unidades totales",
+                "Piezas totales",
                 "Códigos que componen el pallet",
                 "Descripciones",
             ]
@@ -927,10 +927,10 @@ def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
             "deposito_origen": "Depósito origen",
             "deposito_destino": "Depósito destino",
             "pallet": "Pallet",
-            "cantidad_bultos": "Cantidad de bultos",
+            "cantidad_bultos": "Cantidad de cajas",
             "ubicaciones": "Ubicaciones",
             "codigos_distintos": "Cantidad de códigos diferentes",
-            "unidades_totales": "Unidades totales",
+            "unidades_totales": "Piezas totales",
             "codigos": "Códigos que componen el pallet",
             "descripciones": "Descripciones",
         }
@@ -1048,10 +1048,15 @@ def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
         "Depósito destino": "deposito_destino",
         "Deposito destino": "deposito_destino",
         "Pallet": "pallet",
+        "Cantidad de cajas": "cantidad_bultos",
         "Cantidad de bultos": "cantidad_bultos",
+        "Caja": "bulto",
         "Bulto": "bulto",
+        "Cajas del item": "bultos_item",
+        "Cajas del ítem": "bultos_item",
         "Bultos del item": "bultos_item",
         "Bultos del ítem": "bultos_item",
+        "Piezas por caja": "cantidades_bulto",
         "Cantidades por bulto": "cantidades_bulto",
         "Ubicación": "ubicacion",
         "Ubicacion": "ubicacion",
@@ -1061,6 +1066,7 @@ def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
         "Descripción": "descripcion",
         "Descripcion": "descripcion",
         "Unidad": "unidad",
+        "Piezas enviadas": "cantidad_mudada",
         "Cantidad mudada": "cantidad_mudada",
         "Stock original Darkinel": "stock_total",
         "Stock restante Darkinel": "stock_restante_darkinel",
@@ -1150,15 +1156,15 @@ def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.D
                 "Depósito origen",
                 "Depósito destino",
                 "Pallet",
-                "Cantidad de bultos",
+                "Cantidad de cajas",
                 "Ubicación",
                 "Artículo",
                 "Descripción",
-                "Cantidad mudada",
+                "Piezas enviadas",
                 "Código normalizado",
                 "Observaciones",
             ]
-        ].rename(columns={"Cantidad mudada": "Cantidad"})
+        ].rename(columns={"Piezas enviadas": "Piezas"})
 
     if ubicaciones_anteriores is not None and not ubicaciones_anteriores.empty:
         combinado = pd.concat([ubicaciones_anteriores, detalle], ignore_index=True)
@@ -1182,13 +1188,13 @@ def preparar_recepcion_polo(df_pick: pd.DataFrame) -> pd.DataFrame:
                 "Receptor",
                 "OK recepción",
                 "Pallet",
-                "Bulto",
+                "Caja",
                 "Ubicación informada",
                 "Artículo",
                 "Descripción",
                 "Unidad",
-                "Cantidad mudada",
-                "Cantidad recibida",
+                "Piezas enviadas",
+                "Piezas recibidas",
                 "Diferencia",
                 "Código normalizado",
                 "Observaciones recepción",
@@ -1221,13 +1227,13 @@ def preparar_recepcion_polo(df_pick: pd.DataFrame) -> pd.DataFrame:
             "receptor": "Receptor",
             "recepcion_ok": "OK recepción",
             "pallet": "Pallet",
-            "bulto": "Bulto",
+            "bulto": "Caja",
             "ubicacion_recepcion": "Ubicación informada",
             "articulo": "Artículo",
             "descripcion": "Descripción",
             "unidad": "Unidad",
-            "cantidad_mudada": "Cantidad mudada",
-            "cantidad_recibida": "Cantidad recibida",
+            "cantidad_mudada": "Piezas enviadas",
+            "cantidad_recibida": "Piezas recibidas",
             "diferencia": "Diferencia",
             "codigo_normalizado": "Código normalizado",
             "observaciones_recepcion": "Observaciones recepción",
@@ -1255,12 +1261,12 @@ def generar_excel_control(
             {
                 "Depósito": "DARKINEL",
                 "Cantidad de códigos": int((pd.to_numeric(darkinel["Stock restante Darkinel"], errors="coerce").fillna(0) > 0).sum()) if not darkinel.empty else 0,
-                "Unidades totales": formatear_numero(pd.to_numeric(darkinel["Stock restante Darkinel"], errors="coerce").fillna(0).sum()) if not darkinel.empty else 0,
+                "Piezas totales": formatear_numero(pd.to_numeric(darkinel["Stock restante Darkinel"], errors="coerce").fillna(0).sum()) if not darkinel.empty else 0,
             },
             {
                 "Depósito": "POLO LOGISTICO",
                 "Cantidad de códigos": int((pd.to_numeric(polo["Stock total Polo"], errors="coerce").fillna(0) > 0).sum()) if not polo.empty else 0,
-                "Unidades totales": formatear_numero(pd.to_numeric(polo["Stock total Polo"], errors="coerce").fillna(0).sum()) if not polo.empty else 0,
+                "Piezas totales": formatear_numero(pd.to_numeric(polo["Stock total Polo"], errors="coerce").fillna(0).sum()) if not polo.empty else 0,
             },
         ]
     )
@@ -1402,7 +1408,7 @@ def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "
     pages = []
     for bulto in paginas:
         trabajo_pagina = trabajo[trabajo["cantidades_bulto"].map(lambda x: cantidad_en_bulto(x, int(bulto)) > 0)].copy() if bulto is not None else trabajo
-        subtitulo = f"BULTO {bulto} DE {cantidad_bultos}" if bulto is not None else f"BULTOS: {cantidad_bultos}"
+        subtitulo = f"CAJA {bulto} DE {cantidad_bultos}" if bulto is not None else f"CAJAS: {cantidad_bultos}"
         unidades_pagina = (
             formatear_numero(trabajo_pagina["cantidades_bulto"].map(lambda x: cantidad_en_bulto(x, int(bulto))).sum())
             if bulto is not None
@@ -1423,7 +1429,7 @@ def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "
                 "</tr>"
             )
         if not filas_html:
-            filas_html.append("<tr><td colspan='4' class='empty'>Sin articulos cargados para este bulto</td></tr>")
+            filas_html.append("<tr><td colspan='4' class='empty'>Sin articulos cargados para esta caja</td></tr>")
 
         pages.append(
             f"""
@@ -1432,13 +1438,13 @@ def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "
                     <div class="title">PALLET {int(pallet)}</div>
                     <div class="meta">
                         <strong>{subtitulo}</strong><br>
-                        Unidades: {unidades_pagina}<br>
+                        Piezas: {unidades_pagina}<br>
                         Fecha: {_html_escape(fecha)}
                     </div>
                 </header>
                 <table>
                     <thead>
-                        <tr><th>Articulo</th><th>Descripcion</th><th>Cant.</th><th>Codigo de barras</th></tr>
+                        <tr><th>Articulo</th><th>Descripcion</th><th>Piezas</th><th>Codigo de barras</th></tr>
                     </thead>
                     <tbody>{''.join(filas_html)}</tbody>
                 </table>
@@ -1513,7 +1519,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
 
     for idx, bulto in enumerate(paginas):
         titulo = f"PALLET {int(pallet)}"
-        subtitulo = f"BULTO {bulto} DE {cantidad_bultos}" if bulto is not None else f"BULTOS: {cantidad_bultos}"
+        subtitulo = f"CAJA {bulto} DE {cantidad_bultos}" if bulto is not None else f"CAJAS: {cantidad_bultos}"
         trabajo_pagina = trabajo[trabajo["cantidades_bulto"].map(lambda x: cantidad_en_bulto(x, int(bulto)) > 0)].copy() if bulto is not None else trabajo
         unidades_pagina = (
             formatear_numero(trabajo_pagina["cantidades_bulto"].map(lambda x: cantidad_en_bulto(x, int(bulto))).sum())
@@ -1525,7 +1531,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
             [
                 [
                     Paragraph(f"<b>{titulo}</b>", styles["Title"]),
-                    Paragraph(f"<b>{subtitulo}</b><br/>Unidades: {unidades_pagina}<br/>Fecha: {fecha}", styles["Normal"]),
+                    Paragraph(f"<b>{subtitulo}</b><br/>Piezas: {unidades_pagina}<br/>Fecha: {fecha}", styles["Normal"]),
                 ]
             ],
             colWidths=[95 * mm, 95 * mm],
@@ -1546,7 +1552,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
         story.append(header)
         story.append(Spacer(1, 6 * mm))
 
-        rows = [["Articulo", "Descripcion", "Cant.", "Codigo de barras"]]
+        rows = [["Articulo", "Descripcion", "Piezas", "Codigo de barras"]]
         for r in trabajo_pagina.sort_values(["articulo", "descripcion"]).itertuples():
             articulo = str(getattr(r, "articulo", "")).strip()
             codigo_barra = codigo_barra_articulo(articulo, corregir_guion_teclado)
@@ -1562,7 +1568,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
             )
 
         if len(rows) == 1:
-            rows.append(["", "Sin articulos cargados para este bulto", "", ""])
+            rows.append(["", "Sin articulos cargados para esta caja", "", ""])
 
         tabla = Table(rows, colWidths=[33 * mm, 62 * mm, 15 * mm, 80 * mm], repeatRows=1)
         tabla.setStyle(
@@ -1623,8 +1629,8 @@ with st.sidebar:
     deposito_origen = st.text_input("Depósito origen", value="DARKINEL")
     deposito_destino = st.text_input("Depósito destino", value="POLO LOGISTICO")
     pallet_activo = st.number_input("Pallet activo", min_value=1, value=1, step=1)
-    cantidad_bultos_activo = st.number_input("Cantidad de bultos del pallet", min_value=1, value=1, step=1)
-    bulto_activo = st.number_input("Bulto activo", min_value=1, max_value=int(cantidad_bultos_activo), value=1, step=1)
+    cantidad_bultos_activo = st.number_input("Cantidad de cajas del pallet", min_value=1, value=1, step=1)
+    bulto_activo = st.number_input("Caja activa", min_value=1, max_value=int(cantidad_bultos_activo), value=1, step=1)
     ubicacion_default = st.text_input(
         "Ubicación base opcional",
         value="",
@@ -1700,7 +1706,7 @@ col1, col2, col3, col4 = st.columns(4)
 col1.metric("Códigos con stock", f"{len(stock_consolidado):,}".replace(",", "."))
 col2.metric("Stock total DARKINEL", f"{int(pd.to_numeric(stock_consolidado['cantidad'], errors='coerce').fillna(0).sum()):,}".replace(",", "."))
 col3.metric("Líneas en mudanza", len(df_pick))
-col4.metric("Unidades a mudar", f"{int(pd.to_numeric(df_pick.get('cantidad_mudada', pd.Series(dtype=float)), errors='coerce').fillna(0).sum()):,}".replace(",", "."))
+col4.metric("Piezas a mudar", f"{int(pd.to_numeric(df_pick.get('cantidad_mudada', pd.Series(dtype=float)), errors='coerce').fillna(0).sum()):,}".replace(",", "."))
 
 st.markdown("---")
 
@@ -1760,11 +1766,11 @@ with tab_buscar:
                 else:
                     with st.form("form_agregar_un_codigo"):
                         c1, c2, c3, c4, c5, c6 = st.columns(6)
-                        cantidad_mudar = c1.number_input("Cantidad a mudar", min_value=1.0, value=1.0, step=1.0)
+                        cantidad_mudar = c1.number_input("Piezas a mudar", min_value=1.0, value=1.0, step=1.0)
                         pallet = c2.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1)
-                        cantidad_bultos = c3.number_input("Cantidad de bultos", min_value=1, value=int(cantidad_bultos_activo), step=1)
-                        bulto = c4.number_input("Bulto", min_value=1, max_value=int(cantidad_bultos), value=min(int(bulto_activo), int(cantidad_bultos)), step=1)
-                        cantidades_bulto = c5.text_input("Cantidades por bulto", value=f"{int(bulto)}={formatear_numero(cantidad_mudar)}", help="Ej: 1=8, 3=4")
+                        cantidad_bultos = c3.number_input("Cantidad de cajas", min_value=1, value=int(cantidad_bultos_activo), step=1)
+                        bulto = c4.number_input("Caja", min_value=1, max_value=int(cantidad_bultos), value=min(int(bulto_activo), int(cantidad_bultos)), step=1)
+                        cantidades_bulto = c5.text_input("Piezas por caja", value=f"{int(bulto)}={formatear_numero(cantidad_mudar)}", help="Ej: 1=8, 3=4")
                         ubicacion = c6.text_input("Ubicación en Polo", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
                         observaciones = st.text_input("Observaciones", placeholder="Opcional")
                         submit = st.form_submit_button("Agregar a mudanza", type="primary")
@@ -1802,12 +1808,12 @@ with tab_buscar:
                     unidad_manual = m3.text_input("Unidad", value="uni")
 
                     m4, m5, m6, m7, m8, m9, m10 = st.columns(7)
-                    cantidad_manual = m4.number_input("Cantidad a mudar", min_value=1.0, value=1.0, step=1.0, key="cantidad_manual")
+                    cantidad_manual = m4.number_input("Piezas a mudar", min_value=1.0, value=1.0, step=1.0, key="cantidad_manual")
                     stock_darkinel_manual = m5.number_input("Queda en Darkinel", min_value=0.0, value=0.0, step=1.0, key="stock_darkinel_manual")
                     pallet_manual = m6.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1, key="pallet_manual")
-                    cantidad_bultos_manual = m7.number_input("Cantidad de bultos", min_value=1, value=int(cantidad_bultos_activo), step=1, key="cantidad_bultos_manual")
-                    bulto_manual = m8.number_input("Bulto", min_value=1, max_value=int(cantidad_bultos_manual), value=min(int(bulto_activo), int(cantidad_bultos_manual)), step=1, key="bulto_manual")
-                    cantidades_bulto_manual = m9.text_input("Cantidades por bulto", value=f"{int(bulto_manual)}={formatear_numero(cantidad_manual)}", help="Ej: 1=8, 3=4")
+                    cantidad_bultos_manual = m7.number_input("Cantidad de cajas", min_value=1, value=int(cantidad_bultos_activo), step=1, key="cantidad_bultos_manual")
+                    bulto_manual = m8.number_input("Caja", min_value=1, max_value=int(cantidad_bultos_manual), value=min(int(bulto_activo), int(cantidad_bultos_manual)), step=1, key="bulto_manual")
+                    cantidades_bulto_manual = m9.text_input("Piezas por caja", value=f"{int(bulto_manual)}={formatear_numero(cantidad_manual)}", help="Ej: 1=8, 3=4")
                     ubicacion_manual = m10.text_input("Ubicacion", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
                     observaciones_manual = st.text_input("Observaciones manual", value="Articulo agregado manualmente")
                     submit_manual = st.form_submit_button("Agregar manual a mudanza", type="primary")
@@ -1953,16 +1959,16 @@ with tab_pallets:
                 "deposito_origen": "Depósito origen",
                 "deposito_destino": "Depósito destino",
                 "pallet": "Pallet",
-                "cantidad_bultos": "Cantidad de bultos",
-                "bulto": "Bulto",
-                "bultos_item": "Bultos del item",
-                "cantidades_bulto": "Cantidades por bulto",
+                "cantidad_bultos": "Cantidad de cajas",
+                "bulto": "Caja",
+                "bultos_item": "Cajas del item",
+                "cantidades_bulto": "Piezas por caja",
                 "ubicacion": "Ubicación",
                 "lectura_scanner": "Lectura scanner",
                 "articulo": "Artículo",
                 "descripcion": "Descripción",
                 "unidad": "Unidad",
-                "cantidad_mudada": "Cantidad mudada",
+                "cantidad_mudada": "Piezas enviadas",
                 "stock_total": "Stock original Darkinel",
                 "stock_restante_darkinel": "Stock restante Darkinel",
                 "codigo_normalizado": "Código normalizado",
@@ -1988,16 +1994,17 @@ with tab_pallets:
                 item["deposito_origen"] = str(row.get("Depósito origen", "")).strip() or "DARKINEL"
                 item["deposito_destino"] = str(row.get("Depósito destino", "")).strip() or "POLO LOGISTICO"
                 item["pallet"] = entero_seguro(row.get("Pallet", 1), 1)
-                item["cantidad_bultos"] = entero_seguro(row.get("Cantidad de bultos", 1), 1)
-                item["bulto"] = max(1, min(entero_seguro(row.get("Bulto", 1), 1), int(item["cantidad_bultos"])))
-                item["cantidades_bulto"] = normalizar_cantidades_por_bulto(row.get("Cantidades por bulto", ""), row.get("Cantidad mudada", 0), item["bulto"])
-                item["bultos_item"] = bultos_desde_distribucion(item["cantidades_bulto"], row.get("Cantidad mudada", 0), item["bulto"])
+                item["cantidad_bultos"] = entero_seguro(row.get("Cantidad de cajas", row.get("Cantidad de bultos", 1)), 1)
+                item["bulto"] = max(1, min(entero_seguro(row.get("Caja", row.get("Bulto", 1)), 1), int(item["cantidad_bultos"])))
+                piezas_enviadas = row.get("Piezas enviadas", row.get("Cantidad mudada", 0))
+                item["cantidades_bulto"] = normalizar_cantidades_por_bulto(row.get("Piezas por caja", row.get("Cantidades por bulto", "")), piezas_enviadas, item["bulto"])
+                item["bultos_item"] = bultos_desde_distribucion(item["cantidades_bulto"], piezas_enviadas, item["bulto"])
                 item["ubicacion"] = str(row.get("Ubicación", "")).strip().upper() or "PENDIENTE"
                 item["lectura_scanner"] = str(row.get("Lectura scanner", "")).strip()
                 item["articulo"] = str(row.get("Artículo", "")).strip()
                 item["descripcion"] = str(row.get("Descripción", "")).strip()
                 item["unidad"] = str(row.get("Unidad", "")).strip()
-                item["cantidad_mudada"] = suma_cantidades_bulto(item["cantidades_bulto"], row.get("Cantidad mudada", 0), item["bulto"]) or numero_seguro(row.get("Cantidad mudada", 0), 0)
+                item["cantidad_mudada"] = suma_cantidades_bulto(item["cantidades_bulto"], piezas_enviadas, item["bulto"]) or numero_seguro(piezas_enviadas, 0)
                 item["codigo_normalizado"] = str(row.get("Código normalizado", "")).strip() or normalizar_codigo(item["articulo"])
                 item["observaciones"] = str(row.get("Observaciones", "")).strip()
             guardar_mudanza_actual_db()
@@ -2031,17 +2038,17 @@ with tab_pallets:
         pallets_disponibles = sorted(pd.to_numeric(df_para_imprimir["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
         c_pdf1, c_pdf2, c_pdf3 = st.columns([1, 1, 1.4])
         pallet_pdf = c_pdf1.selectbox("Pallet para imprimir", pallets_disponibles)
-        modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por bulto"], horizontal=True)
+        modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por caja"], horizontal=True)
         corregir_guion_teclado = c_pdf3.checkbox(
             "Corregir guion del lector",
             value=True,
             help="Dejalo marcado si al escanear el guion sale como apostrofe. Si el lector ya lee bien los guiones, desmarcalo.",
         )
-        modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por bulto" else "pallet"
+        modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por caja" else "pallet"
         if REPORTLAB_DISPONIBLE:
             pdf_bytes = generar_pdf_pallet_bultos(df_para_imprimir, pallet_pdf, modo_pdf_interno, corregir_guion_teclado)
             st.download_button(
-                "Descargar A4 pallet / bultos PDF",
+                "Descargar A4 pallet / cajas PDF",
                 data=pdf_bytes,
                 file_name=f"pallet_{int(pallet_pdf)}_{modo_pdf_interno}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
                 mime="application/pdf",
@@ -2066,13 +2073,13 @@ with tab_pallets:
             pallets_disponibles = sorted(pd.to_numeric(df_reimpresion["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
             c_pdf1, c_pdf2, c_pdf3 = st.columns([1, 1, 1.4])
             pallet_pdf = c_pdf1.selectbox("Pallet para reimprimir", pallets_disponibles)
-            modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por bulto"], horizontal=True, key="modo_reimprimir_anterior")
+            modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por caja"], horizontal=True, key="modo_reimprimir_anterior")
             corregir_guion_teclado = c_pdf3.checkbox("Corregir guion del lector", value=True, key="guion_reimprimir_anterior")
-            modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por bulto" else "pallet"
+            modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por caja" else "pallet"
             if REPORTLAB_DISPONIBLE:
                 pdf_bytes = generar_pdf_pallet_bultos(df_reimpresion, pallet_pdf, modo_pdf_interno, corregir_guion_teclado)
                 st.download_button(
-                    "Descargar A4 pallet / bultos PDF",
+                    "Descargar A4 pallet / cajas PDF",
                     data=pdf_bytes,
                     file_name=f"pallet_{int(pallet_pdf)}_{modo_pdf_interno}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
                     mime="application/pdf",
@@ -2094,7 +2101,7 @@ with tab_pallets:
         st.caption("No hay líneas pendientes para ubicar.")
     else:
         opciones_ubicacion = [
-            f"{r.item_id}) Pallet {r.pallet} | Bulto {r.bulto} | {r.ubicacion} | {r.articulo} | Cant. {r.cantidad_mudada}"
+            f"{r.item_id}) Pallet {r.pallet} | Caja {r.bulto} | {r.ubicacion} | {r.articulo} | Piezas {r.cantidad_mudada}"
             for r in df_pick.itertuples()
         ]
         linea_ubicacion = st.selectbox("Línea a actualizar", opciones_ubicacion)
@@ -2115,7 +2122,7 @@ with tab_pallets:
     if df_pick.empty:
         st.caption("No hay líneas para corregir.")
     else:
-        opciones_corregir = [f"{r.item_id}) Pallet {r.pallet} | Bulto {r.bulto} | {r.ubicacion} | {r.articulo} | Cant. {r.cantidad_mudada}" for r in df_pick.itertuples()]
+        opciones_corregir = [f"{r.item_id}) Pallet {r.pallet} | Caja {r.bulto} | {r.ubicacion} | {r.articulo} | Piezas {r.cantidad_mudada}" for r in df_pick.itertuples()]
 
         st.markdown("**Modificar línea**")
         linea_cantidad = st.selectbox("Línea para modificar", opciones_corregir, key="linea_modificar_cantidad")
@@ -2133,11 +2140,11 @@ with tab_pallets:
 
         with st.form("form_modificar_linea"):
             e1, e2, e3, e4, e5, e6 = st.columns(6)
-            nueva_cantidad = e1.number_input("Cantidad a mudar", min_value=1.0, value=cantidad_actual, step=1.0)
+            nueva_cantidad = e1.number_input("Piezas a mudar", min_value=1.0, value=cantidad_actual, step=1.0)
             nuevo_pallet = e2.number_input("Pallet", min_value=1, value=pallet_actual, step=1)
-            nueva_cantidad_bultos = e3.number_input("Cantidad de bultos", min_value=1, value=cantidad_bultos_actual, step=1)
-            nuevo_bulto = e4.number_input("Bulto", min_value=1, max_value=int(nueva_cantidad_bultos), value=min(bulto_actual, int(nueva_cantidad_bultos)), step=1)
-            nuevas_cantidades_bulto = e5.text_input("Cantidades por bulto", value=cantidades_bulto_actual, help="Ej: 1=8, 3=4")
+            nueva_cantidad_bultos = e3.number_input("Cantidad de cajas", min_value=1, value=cantidad_bultos_actual, step=1)
+            nuevo_bulto = e4.number_input("Caja", min_value=1, max_value=int(nueva_cantidad_bultos), value=min(bulto_actual, int(nueva_cantidad_bultos)), step=1)
+            nuevas_cantidades_bulto = e5.text_input("Piezas por caja", value=cantidades_bulto_actual, help="Ej: 1=8, 3=4")
             nueva_ubicacion_editar = e6.text_input("Ubicación", value="" if ubicacion_actual_editar == "PENDIENTE" else ubicacion_actual_editar)
 
             aplicar_stock_real = st.checkbox(
@@ -2174,7 +2181,7 @@ with tab_pallets:
                 st.error(msg)
 
         st.markdown("**Quitar líneas**")
-        opciones_quitar = [f"{r.item_id}) Pallet {r.pallet} | Bulto {r.bulto} | {r.ubicacion} | {r.articulo} | Cant. {r.cantidad_mudada}" for r in df_pick.itertuples()]
+        opciones_quitar = [f"{r.item_id}) Pallet {r.pallet} | Caja {r.bulto} | {r.ubicacion} | {r.articulo} | Piezas {r.cantidad_mudada}" for r in df_pick.itertuples()]
         quitar = st.multiselect("Líneas para quitar", opciones_quitar)
         if st.button("Quitar líneas seleccionadas") and quitar:
             ids = {int(x.split(")", 1)[0]) for x in quitar}
@@ -2216,12 +2223,12 @@ with tab_recepcion:
             columns={
                 "item_id": "ID",
                 "pallet": "Pallet",
-                "bulto": "Bulto",
+                "bulto": "Caja",
                 "articulo": "Artículo",
                 "descripcion": "Descripción",
                 "unidad": "Unidad",
-                "cantidad_mudada": "Cantidad mudada",
-                "cantidad_recibida": "Cantidad recibida",
+                "cantidad_mudada": "Piezas enviadas",
+                "cantidad_recibida": "Piezas recibidas",
                 "recepcion_ok": "OK recepción",
                 "ubicacion_recepcion": "Ubicación Polo",
                 "receptor": "Recibido por",
@@ -2235,7 +2242,7 @@ with tab_recepcion:
             recepcion_editor,
             use_container_width=True,
             hide_index=True,
-            disabled=["ID", "Pallet", "Bulto", "Artículo", "Descripción", "Unidad", "Cantidad mudada", "Ubicación Polo", "Recibido por", "Fecha recepción"],
+            disabled=["ID", "Pallet", "Caja", "Artículo", "Descripción", "Unidad", "Piezas enviadas", "Ubicación Polo", "Recibido por", "Fecha recepción"],
             num_rows="fixed",
             key="recepcion_polo_editor",
         )
@@ -2256,7 +2263,7 @@ with tab_recepcion:
                 if not item:
                     continue
                 ubicacion_polo = str(ubicacion_pallet).strip().upper()
-                item["cantidad_recibida"] = numero_seguro(row.get("Cantidad recibida", item.get("cantidad_mudada", 0)), 0)
+                item["cantidad_recibida"] = numero_seguro(row.get("Piezas recibidas", row.get("Cantidad recibida", item.get("cantidad_mudada", 0))), 0)
                 item["recepcion_ok"] = True
                 item["ubicacion_recepcion"] = ubicacion_polo
                 item["ubicacion"] = ubicacion_polo
