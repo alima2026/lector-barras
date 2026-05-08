@@ -897,7 +897,7 @@ def nombre_archivo_control() -> str:
 def _barcode_articulo_flowable(codigo: str):
     if not codigo:
         codigo = "SIN-CODIGO"
-    return code39.Standard39(codigo, barHeight=14 * mm, barWidth=0.42 * mm, humanReadable=False)
+    return code128.Code128(codigo, barHeight=13 * mm, barWidth=0.30 * mm, humanReadable=False)
 
 
 def codigo_barra_articulo(articulo: str, corregir_guion_teclado: bool = False) -> str:
@@ -1155,7 +1155,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
         if len(rows) == 1:
             rows.append(["", "Sin articulos cargados para este bulto", "", ""])
 
-        tabla = Table(rows, colWidths=[35 * mm, 72 * mm, 18 * mm, 65 * mm], repeatRows=1)
+        tabla = Table(rows, colWidths=[33 * mm, 62 * mm, 15 * mm, 80 * mm], repeatRows=1)
         tabla.setStyle(
             TableStyle(
                 [
