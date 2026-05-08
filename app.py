@@ -144,6 +144,37 @@ def entero_seguro(valor, defecto: int = 0) -> int:
     return int(numero_seguro(valor, defecto))
 
 
+def normalizar_bultos_item(valor, defecto: str = "1") -> str:
+    texto = str(valor if valor is not None else "").strip()
+    if not texto:
+        texto = defecto
+    numeros = []
+    for parte in re.split(r"[,;/\s]+", texto):
+        parte = parte.strip()
+        if not parte:
+            continue
+        if "-" in parte:
+            inicio_txt, fin_txt = parte.split("-", 1)
+            inicio = entero_seguro(inicio_txt, 0)
+            fin = entero_seguro(fin_txt, 0)
+            if inicio > 0 and fin >= inicio:
+                numeros.extend(range(inicio, fin + 1))
+        else:
+            num = entero_seguro(parte, 0)
+            if num > 0:
+                numeros.append(num)
+    unicos = []
+    for num in numeros:
+        if num not in unicos:
+            unicos.append(num)
+    return ", ".join(str(n) for n in unicos) if unicos else str(defecto)
+
+
+def item_en_bulto(valor, bulto: int) -> bool:
+    bultos = normalizar_bultos_item(valor).replace(" ", "").split(",")
+    return str(int(bulto)) in bultos
+
+
 def formatear_numero(x):
     try:
         fx = float(x)
@@ -478,6 +509,8 @@ def inicializar_estado() -> None:
             item["cantidad_bultos"] = item.get("bultos_pallet", 1)
         if "bulto" not in item:
             item["bulto"] = 1
+        if "bultos_item" not in item:
+            item["bultos_item"] = str(item.get("bulto", 1))
         if "ubicacion" not in item:
             item["ubicacion"] = str(item.get("bultos_item", "")).strip().upper()
         if not str(item.get("ubicacion", "")).strip():
@@ -526,6 +559,7 @@ def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
         "deposito_destino": "POLO LOGISTICO",
         "pallet": 1,
         "bulto": 1,
+        "bultos_item": "1",
         "lectura_scanner": "",
         "articulo": "",
         "descripcion": "",
@@ -549,6 +583,7 @@ def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
     trabajo["cantidad_bultos"] = pd.to_numeric(trabajo["cantidad_bultos"], errors="coerce").fillna(1).astype(int)
     trabajo["pallet"] = pd.to_numeric(trabajo["pallet"], errors="coerce").fillna(1).astype(int)
     trabajo["bulto"] = pd.to_numeric(trabajo["bulto"], errors="coerce").fillna(1).astype(int)
+    trabajo["bultos_item"] = trabajo["bultos_item"].fillna("").map(lambda x: normalizar_bultos_item(x))
     trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
     trabajo["cantidad_recibida"] = pd.to_numeric(trabajo["cantidad_recibida"], errors="coerce")
     trabajo["cantidad_recibida"] = trabajo["cantidad_recibida"].fillna(trabajo["cantidad_mudada"])
@@ -566,6 +601,7 @@ def agregar_item_a_mudanza(
     pallet: int,
     cantidad_bultos: int,
     bulto: int,
+    bultos_item: str,
     ubicacion: str,
     deposito_origen: str,
     deposito_destino: str,
@@ -598,6 +634,7 @@ def agregar_item_a_mudanza(
             "pallet": int(pallet),
             "cantidad_bultos": int(cantidad_bultos),
             "bulto": int(bulto),
+            "bultos_item": normalizar_bultos_item(bultos_item, str(bulto)),
             "ubicacion": str(ubicacion).strip().upper() or "PENDIENTE",
             "lectura_scanner": str(lectura_original).strip(),
             "articulo": str(row.get("articulo", "")).strip(),
@@ -651,6 +688,7 @@ def actualizar_linea_item(
     nuevo_pallet: int,
     nueva_cantidad_bultos: int,
     nuevo_bulto: int,
+    nuevos_bultos_item: str,
     nueva_ubicacion: str,
     stock_darkinel_restante: float | None = None,
 ) -> Tuple[bool, str]:
@@ -663,6 +701,7 @@ def actualizar_linea_item(
             item["pallet"] = int(nuevo_pallet)
             item["cantidad_bultos"] = int(nueva_cantidad_bultos)
             item["bulto"] = int(nuevo_bulto)
+            item["bultos_item"] = normalizar_bultos_item(nuevos_bultos_item, str(nuevo_bulto))
             item["ubicacion"] = str(nueva_ubicacion).strip().upper() or "PENDIENTE"
             if stock_darkinel_restante is not None:
                 item["stock_total"] = float(nueva_cantidad) + float(stock_darkinel_restante)
@@ -706,6 +745,7 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
                 "Pallet",
                 "Cantidad de bultos",
                 "Bulto",
+                "Bultos del item",
                 "Ubicación",
                 "Lectura scanner",
                 "Artículo",
@@ -728,6 +768,7 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
         "pallet",
         "cantidad_bultos",
         "bulto",
+        "bultos_item",
         "ubicacion",
         "lectura_scanner",
         "articulo",
@@ -748,6 +789,7 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
             "pallet": "Pallet",
             "cantidad_bultos": "Cantidad de bultos",
             "bulto": "Bulto",
+            "bultos_item": "Bultos del item",
             "ubicacion": "Ubicación",
             "lectura_scanner": "Lectura scanner",
             "articulo": "Artículo",
@@ -919,6 +961,8 @@ def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
         "Pallet": "pallet",
         "Cantidad de bultos": "cantidad_bultos",
         "Bulto": "bulto",
+        "Bultos del item": "bultos_item",
+        "Bultos del ítem": "bultos_item",
         "Ubicación": "ubicacion",
         "Ubicacion": "ubicacion",
         "Lectura scanner": "lectura_scanner",
@@ -1267,7 +1311,7 @@ def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "
 
     pages = []
     for bulto in paginas:
-        trabajo_pagina = trabajo[trabajo["bulto"] == int(bulto)].copy() if bulto is not None else trabajo
+        trabajo_pagina = trabajo[trabajo["bultos_item"].map(lambda x: item_en_bulto(x, int(bulto)))].copy() if bulto is not None else trabajo
         subtitulo = f"BULTO {bulto} DE {cantidad_bultos}" if bulto is not None else f"BULTOS: {cantidad_bultos}"
         filas_html = []
         for r in trabajo_pagina.sort_values(["articulo", "descripcion"]).itertuples():
@@ -1401,7 +1445,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
         story.append(header)
         story.append(Spacer(1, 6 * mm))
 
-        trabajo_pagina = trabajo[trabajo["bulto"] == int(bulto)].copy() if bulto is not None else trabajo
+        trabajo_pagina = trabajo[trabajo["bultos_item"].map(lambda x: item_en_bulto(x, int(bulto)))].copy() if bulto is not None else trabajo
         rows = [["Articulo", "Descripcion", "Cant.", "Codigo de barras"]]
         for r in trabajo_pagina.sort_values(["articulo", "descripcion"]).itertuples():
             articulo = str(getattr(r, "articulo", "")).strip()
@@ -1615,12 +1659,13 @@ with tab_buscar:
                     st.warning("Este código ya quedó totalmente marcado para mudanza en los pallets actuales.")
                 else:
                     with st.form("form_agregar_un_codigo"):
-                        c1, c2, c3, c4, c5 = st.columns(5)
+                        c1, c2, c3, c4, c5, c6 = st.columns(6)
                         cantidad_mudar = c1.number_input("Cantidad a mudar", min_value=1.0, value=1.0, step=1.0)
                         pallet = c2.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1)
                         cantidad_bultos = c3.number_input("Cantidad de bultos", min_value=1, value=int(cantidad_bultos_activo), step=1)
                         bulto = c4.number_input("Bulto", min_value=1, max_value=int(cantidad_bultos), value=min(int(bulto_activo), int(cantidad_bultos)), step=1)
-                        ubicacion = c5.text_input("Ubicación en Polo", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
+                        bultos_item = c5.text_input("Bultos del item", value=str(bulto), help="Ej: 1 o 1,2 o 2-4")
+                        ubicacion = c6.text_input("Ubicación en Polo", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
                         observaciones = st.text_input("Observaciones", placeholder="Opcional")
                         submit = st.form_submit_button("Agregar a mudanza", type="primary")
 
@@ -1632,6 +1677,7 @@ with tab_buscar:
                             pallet=pallet,
                             cantidad_bultos=cantidad_bultos,
                             bulto=bulto,
+                            bultos_item=bultos_item,
                             ubicacion=ubicacion,
                             deposito_origen=deposito_origen,
                             deposito_destino=deposito_destino,
@@ -1654,13 +1700,14 @@ with tab_buscar:
                     descripcion_manual = m2.text_input("Descripcion", value="")
                     unidad_manual = m3.text_input("Unidad", value="uni")
 
-                    m4, m5, m6, m7, m8, m9 = st.columns(6)
+                    m4, m5, m6, m7, m8, m9, m10 = st.columns(7)
                     cantidad_manual = m4.number_input("Cantidad a mudar", min_value=1.0, value=1.0, step=1.0, key="cantidad_manual")
                     stock_darkinel_manual = m5.number_input("Queda en Darkinel", min_value=0.0, value=0.0, step=1.0, key="stock_darkinel_manual")
                     pallet_manual = m6.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1, key="pallet_manual")
                     cantidad_bultos_manual = m7.number_input("Cantidad de bultos", min_value=1, value=int(cantidad_bultos_activo), step=1, key="cantidad_bultos_manual")
                     bulto_manual = m8.number_input("Bulto", min_value=1, max_value=int(cantidad_bultos_manual), value=min(int(bulto_activo), int(cantidad_bultos_manual)), step=1, key="bulto_manual")
-                    ubicacion_manual = m9.text_input("Ubicacion", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
+                    bultos_item_manual = m9.text_input("Bultos del item", value=str(bulto_manual), help="Ej: 1 o 1,2 o 2-4")
+                    ubicacion_manual = m10.text_input("Ubicacion", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
                     observaciones_manual = st.text_input("Observaciones manual", value="Articulo agregado manualmente")
                     submit_manual = st.form_submit_button("Agregar manual a mudanza", type="primary")
 
@@ -1686,6 +1733,7 @@ with tab_buscar:
                             pallet=pallet_manual,
                             cantidad_bultos=cantidad_bultos_manual,
                             bulto=bulto_manual,
+                            bultos_item=bultos_item_manual,
                             ubicacion=ubicacion_manual,
                             deposito_origen=deposito_origen,
                             deposito_destino=deposito_destino,
@@ -1742,6 +1790,7 @@ with tab_buscar:
                             pallet=int(pallet_activo),
                             cantidad_bultos=int(cantidad_bultos_activo),
                             bulto=int(bulto_activo),
+                            bultos_item=str(bulto_activo),
                             ubicacion=ubicacion_default,
                             deposito_origen=deposito_origen,
                             deposito_destino=deposito_destino,
@@ -1781,6 +1830,7 @@ with tab_pallets:
                 "pallet",
                 "cantidad_bultos",
                 "bulto",
+                "bultos_item",
                 "ubicacion",
                 "lectura_scanner",
                 "articulo",
@@ -1801,6 +1851,7 @@ with tab_pallets:
                 "pallet": "Pallet",
                 "cantidad_bultos": "Cantidad de bultos",
                 "bulto": "Bulto",
+                "bultos_item": "Bultos del item",
                 "ubicacion": "Ubicación",
                 "lectura_scanner": "Lectura scanner",
                 "articulo": "Artículo",
@@ -1834,6 +1885,7 @@ with tab_pallets:
                 item["pallet"] = entero_seguro(row.get("Pallet", 1), 1)
                 item["cantidad_bultos"] = entero_seguro(row.get("Cantidad de bultos", 1), 1)
                 item["bulto"] = max(1, min(entero_seguro(row.get("Bulto", 1), 1), int(item["cantidad_bultos"])))
+                item["bultos_item"] = normalizar_bultos_item(row.get("Bultos del item", item["bulto"]), str(item["bulto"]))
                 item["ubicacion"] = str(row.get("Ubicación", "")).strip().upper() or "PENDIENTE"
                 item["lectura_scanner"] = str(row.get("Lectura scanner", "")).strip()
                 item["articulo"] = str(row.get("Artículo", "")).strip()
@@ -1967,17 +2019,19 @@ with tab_pallets:
         pallet_actual = int(pd.to_numeric(fila_editar["pallet"], errors="coerce"))
         cantidad_bultos_actual = int(pd.to_numeric(fila_editar["cantidad_bultos"], errors="coerce"))
         bulto_actual = int(pd.to_numeric(fila_editar["bulto"], errors="coerce"))
+        bultos_item_actual = str(fila_editar.get("bultos_item", bulto_actual))
         ubicacion_actual_editar = str(fila_editar["ubicacion"])
         stock_total_linea = float(pd.to_numeric(fila_editar["stock_total"], errors="coerce"))
         stock_restante_sugerido = max(stock_total_linea - cantidad_actual, 0)
 
         with st.form("form_modificar_linea"):
-            e1, e2, e3, e4, e5 = st.columns(5)
+            e1, e2, e3, e4, e5, e6 = st.columns(6)
             nueva_cantidad = e1.number_input("Cantidad a mudar", min_value=1.0, value=cantidad_actual, step=1.0)
             nuevo_pallet = e2.number_input("Pallet", min_value=1, value=pallet_actual, step=1)
             nueva_cantidad_bultos = e3.number_input("Cantidad de bultos", min_value=1, value=cantidad_bultos_actual, step=1)
             nuevo_bulto = e4.number_input("Bulto", min_value=1, max_value=int(nueva_cantidad_bultos), value=min(bulto_actual, int(nueva_cantidad_bultos)), step=1)
-            nueva_ubicacion_editar = e5.text_input("Ubicación", value="" if ubicacion_actual_editar == "PENDIENTE" else ubicacion_actual_editar)
+            nuevos_bultos_item = e5.text_input("Bultos del item", value=bultos_item_actual, help="Ej: 1 o 1,2 o 2-4")
+            nueva_ubicacion_editar = e6.text_input("Ubicación", value="" if ubicacion_actual_editar == "PENDIENTE" else ubicacion_actual_editar)
 
             aplicar_stock_real = st.checkbox(
                 "Actualizar stock real que queda en Darkinel",
@@ -2000,6 +2054,7 @@ with tab_pallets:
                 nuevo_pallet,
                 nueva_cantidad_bultos,
                 nuevo_bulto,
+                nuevos_bultos_item,
                 nueva_ubicacion_editar,
                 stock_darkinel_restante if aplicar_stock_real else None,
             )
