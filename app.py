@@ -5,12 +5,18 @@ from typing import Dict, List, Tuple
 
 import pandas as pd
 import streamlit as st
-from reportlab.graphics.barcode import code128
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import mm
-from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+try:
+    from reportlab.graphics.barcode import code128
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    REPORTLAB_DISPONIBLE = True
+except ModuleNotFoundError:
+    REPORTLAB_DISPONIBLE = False
 
 
 # ==========================================================
@@ -895,6 +901,9 @@ def _barcode_articulo_flowable(articulo: str):
 
 
 def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "pallet") -> bytes:
+    if not REPORTLAB_DISPONIBLE:
+        return b""
+
     trabajo = normalizar_df_pick(df_pick)
     if trabajo.empty:
         return b""
@@ -1254,19 +1263,22 @@ with tab_pallets:
 
         st.markdown("---")
         st.subheader("Hoja A4 con codigos de barras")
-        pallets_disponibles = sorted(pd.to_numeric(df_pick["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
-        c_pdf1, c_pdf2 = st.columns(2)
-        pallet_pdf = c_pdf1.selectbox("Pallet para imprimir", pallets_disponibles)
-        modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por bulto"], horizontal=True)
-        modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por bulto" else "pallet"
-        pdf_bytes = generar_pdf_pallet_bultos(df_pick, pallet_pdf, modo_pdf_interno)
-        st.download_button(
-            "Descargar A4 pallet / bultos PDF",
-            data=pdf_bytes,
-            file_name=f"pallet_{int(pallet_pdf)}_{modo_pdf_interno}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-            mime="application/pdf",
-            type="primary",
-        )
+        if not REPORTLAB_DISPONIBLE:
+            st.error("Para generar PDF con codigos de barras falta instalar reportlab. Verifica que requirements.txt incluya: reportlab>=4.2")
+        else:
+            pallets_disponibles = sorted(pd.to_numeric(df_pick["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
+            c_pdf1, c_pdf2 = st.columns(2)
+            pallet_pdf = c_pdf1.selectbox("Pallet para imprimir", pallets_disponibles)
+            modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por bulto"], horizontal=True)
+            modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por bulto" else "pallet"
+            pdf_bytes = generar_pdf_pallet_bultos(df_pick, pallet_pdf, modo_pdf_interno)
+            st.download_button(
+                "Descargar A4 pallet / bultos PDF",
+                data=pdf_bytes,
+                file_name=f"pallet_{int(pallet_pdf)}_{modo_pdf_interno}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                mime="application/pdf",
+                type="primary",
+            )
     else:
         st.info("Todavía no hay artículos agregados a la mudanza.")
 
