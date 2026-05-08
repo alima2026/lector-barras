@@ -900,6 +900,173 @@ def _barcode_articulo_flowable(articulo: str):
     return code128.Code128(codigo, barHeight=12 * mm, barWidth=0.33 * mm, humanReadable=True)
 
 
+CODE39_PATTERNS = {
+    "0": "101001101101",
+    "1": "110100101011",
+    "2": "101100101011",
+    "3": "110110010101",
+    "4": "101001101011",
+    "5": "110100110101",
+    "6": "101100110101",
+    "7": "101001011011",
+    "8": "110100101101",
+    "9": "101100101101",
+    "A": "110101001011",
+    "B": "101101001011",
+    "C": "110110100101",
+    "D": "101011001011",
+    "E": "110101100101",
+    "F": "101101100101",
+    "G": "101010011011",
+    "H": "110101001101",
+    "I": "101101001101",
+    "J": "101011001101",
+    "K": "110101010011",
+    "L": "101101010011",
+    "M": "110110101001",
+    "N": "101011010011",
+    "O": "110101101001",
+    "P": "101101101001",
+    "Q": "101010110011",
+    "R": "110101011001",
+    "S": "101101011001",
+    "T": "101011011001",
+    "U": "110010101011",
+    "V": "100110101011",
+    "W": "110011010101",
+    "X": "100101101011",
+    "Y": "110010110101",
+    "Z": "100110110101",
+    "-": "100101011011",
+    ".": "110010101101",
+    " ": "100110101101",
+    "$": "100100100101",
+    "/": "100100101001",
+    "+": "100101001001",
+    "%": "101001001001",
+    "*": "100101101101",
+}
+
+
+def _html_escape(valor) -> str:
+    texto = "" if valor is None else str(valor)
+    return (
+        texto.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def _codigo_barra_code39_svg(codigo: str, height: int = 54, module: int = 2) -> str:
+    limpio = str(codigo or "SIN-CODIGO").upper()
+    limpio = "".join(ch if ch in CODE39_PATTERNS and ch != "*" else "-" for ch in limpio)
+    completo = f"*{limpio}*"
+    width = (len(completo) * 13 + max(len(completo) - 1, 0)) * module
+    x = 0
+    rects = []
+    for idx, ch in enumerate(completo):
+        pattern = CODE39_PATTERNS.get(ch, CODE39_PATTERNS["-"])
+        for pos, bit in enumerate(pattern):
+            if bit == "1":
+                rects.append(f'<rect x="{x}" y="0" width="{module}" height="{height}" />')
+            x += module
+        if idx < len(completo) - 1:
+            x += module
+    return f'<svg class="barcode" viewBox="0 0 {width} {height}" preserveAspectRatio="none">{"".join(rects)}</svg>'
+
+
+def generar_html_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "pallet") -> bytes:
+    trabajo = normalizar_df_pick(df_pick)
+    if trabajo.empty:
+        return b""
+
+    trabajo = trabajo[pd.to_numeric(trabajo["pallet"], errors="coerce").fillna(0).astype(int) == int(pallet)].copy()
+    if trabajo.empty:
+        return b""
+
+    trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
+    cantidad_bultos = int(pd.to_numeric(trabajo["cantidad_bultos"], errors="coerce").fillna(1).max())
+    unidades = formatear_numero(trabajo["cantidad_mudada"].sum())
+    codigos_distintos = int(trabajo["codigo_normalizado"].nunique())
+    fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
+    paginas = list(range(1, cantidad_bultos + 1)) if modo == "bultos" else [None]
+
+    pages = []
+    for bulto in paginas:
+        trabajo_pagina = trabajo[trabajo["bulto"] == int(bulto)].copy() if bulto is not None else trabajo
+        subtitulo = f"BULTO {bulto} DE {cantidad_bultos}" if bulto is not None else f"BULTOS: {cantidad_bultos}"
+        filas_html = []
+        for r in trabajo_pagina.sort_values(["articulo", "descripcion"]).itertuples():
+            articulo = str(getattr(r, "articulo", "")).strip()
+            descripcion = str(getattr(r, "descripcion", "")).strip()
+            cantidad = formatear_numero(getattr(r, "cantidad_mudada", 0))
+            filas_html.append(
+                "<tr>"
+                f"<td class='art'>{_html_escape(articulo)}</td>"
+                f"<td>{_html_escape(descripcion)}</td>"
+                f"<td class='cant'>{_html_escape(cantidad)}</td>"
+                f"<td class='bar'>{_codigo_barra_code39_svg(articulo)}<div>{_html_escape(articulo)}</div></td>"
+                "</tr>"
+            )
+        if not filas_html:
+            filas_html.append("<tr><td colspan='4' class='empty'>Sin articulos cargados para este bulto</td></tr>")
+
+        pages.append(
+            f"""
+            <section class="page">
+                <header>
+                    <div class="title">PALLET {int(pallet)}</div>
+                    <div class="meta">
+                        <strong>{subtitulo}</strong><br>
+                        Codigos: {codigos_distintos}<br>
+                        Unidades: {unidades}<br>
+                        Fecha: {_html_escape(fecha)}
+                    </div>
+                </header>
+                <table>
+                    <thead>
+                        <tr><th>Articulo</th><th>Descripcion</th><th>Cant.</th><th>Codigo de barras</th></tr>
+                    </thead>
+                    <tbody>{''.join(filas_html)}</tbody>
+                </table>
+            </section>
+            """
+        )
+
+    html = f"""
+    <!doctype html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>Pallet {int(pallet)} - codigos de barras</title>
+        <style>
+            @page {{ size: A4; margin: 10mm; }}
+            * {{ box-sizing: border-box; }}
+            body {{ margin: 0; font-family: Arial, Helvetica, sans-serif; color: #111; }}
+            .page {{ min-height: 277mm; page-break-after: always; padding: 0; }}
+            .page:last-child {{ page-break-after: auto; }}
+            header {{ display: grid; grid-template-columns: 1fr 1fr; border: 2px solid #111; background: #f2f2f2; margin-bottom: 8mm; }}
+            .title {{ font-size: 34px; font-weight: 800; padding: 8mm; display: flex; align-items: center; }}
+            .meta {{ font-size: 15px; line-height: 1.45; padding: 8mm; border-left: 1px solid #111; }}
+            table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+            th {{ background: #111; color: #fff; text-align: left; font-size: 12px; padding: 5px; }}
+            td {{ border: 1px solid #bbb; padding: 5px; vertical-align: middle; font-size: 11px; overflow-wrap: anywhere; }}
+            .art {{ width: 24%; font-weight: 700; }}
+            .cant {{ width: 8%; text-align: center; font-weight: 700; }}
+            .bar {{ width: 34%; text-align: center; font-size: 10px; }}
+            .barcode {{ display: block; width: 100%; height: 48px; fill: #000; margin-bottom: 3px; }}
+            .empty {{ text-align: center; padding: 18px; color: #666; }}
+            @media print {{ .page {{ break-after: page; }} .page:last-child {{ break-after: auto; }} }}
+        </style>
+    </head>
+    <body>{''.join(pages)}</body>
+    </html>
+    """
+    return html.encode("utf-8")
+
+
 def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "pallet") -> bytes:
     if not REPORTLAB_DISPONIBLE:
         return b""
@@ -1263,20 +1430,28 @@ with tab_pallets:
 
         st.markdown("---")
         st.subheader("Hoja A4 con codigos de barras")
-        if not REPORTLAB_DISPONIBLE:
-            st.error("Para generar PDF con codigos de barras falta instalar reportlab. Verifica que requirements.txt incluya: reportlab>=4.2")
-        else:
-            pallets_disponibles = sorted(pd.to_numeric(df_pick["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
-            c_pdf1, c_pdf2 = st.columns(2)
-            pallet_pdf = c_pdf1.selectbox("Pallet para imprimir", pallets_disponibles)
-            modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por bulto"], horizontal=True)
-            modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por bulto" else "pallet"
+        pallets_disponibles = sorted(pd.to_numeric(df_pick["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
+        c_pdf1, c_pdf2 = st.columns(2)
+        pallet_pdf = c_pdf1.selectbox("Pallet para imprimir", pallets_disponibles)
+        modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por bulto"], horizontal=True)
+        modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por bulto" else "pallet"
+        if REPORTLAB_DISPONIBLE:
             pdf_bytes = generar_pdf_pallet_bultos(df_pick, pallet_pdf, modo_pdf_interno)
             st.download_button(
                 "Descargar A4 pallet / bultos PDF",
                 data=pdf_bytes,
                 file_name=f"pallet_{int(pallet_pdf)}_{modo_pdf_interno}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
                 mime="application/pdf",
+                type="primary",
+            )
+        else:
+            html_bytes = generar_html_pallet_bultos(df_pick, pallet_pdf, modo_pdf_interno)
+            st.warning("Reportlab no esta instalado en Streamlit Cloud. Mientras tanto podes descargar esta hoja HTML, abrirla e imprimirla en A4 o guardarla como PDF.")
+            st.download_button(
+                "Descargar A4 imprimible HTML",
+                data=html_bytes,
+                file_name=f"pallet_{int(pallet_pdf)}_{modo_pdf_interno}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+                mime="text/html",
                 type="primary",
             )
     else:
