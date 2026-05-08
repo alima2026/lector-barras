@@ -1934,8 +1934,15 @@ with tab_recepcion:
     if df_pick.empty:
         st.info("Todavía no hay artículos en la mudanza para recibir.")
     else:
-        st.caption("El receptor confirma cantidades y ubicación. Al guardar, la ubicación informada actualiza la mudanza y las bases.")
-        recepcion_editor = normalizar_df_pick(df_pick)[
+        st.caption("Seleccioná el pallet, informá una ubicación única y desmarcá solamente lo que tenga problema. Si hay algo desmarcado, ese pallet no se guarda.")
+        trabajo_recepcion = normalizar_df_pick(df_pick)
+        pallets_recepcion = sorted(pd.to_numeric(trabajo_recepcion["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
+        pr1, pr2, pr3 = st.columns([1, 1.5, 1.5])
+        pallet_recepcion = pr1.selectbox("Pallet a recibir", pallets_recepcion)
+        ubicacion_pallet = pr2.text_input("Ubicación única del pallet", placeholder="Ej: 1-L-3")
+        receptor_pallet = pr3.text_input("Recibido por", placeholder="Nombre")
+
+        recepcion_editor = trabajo_recepcion[trabajo_recepcion["pallet"] == int(pallet_recepcion)][
             [
                 "item_id",
                 "pallet",
@@ -1968,17 +1975,25 @@ with tab_recepcion:
                 "observaciones_recepcion": "Observaciones recepción",
             }
         )
+        recepcion_editor["OK recepción"] = True
 
         recepcion_editada = st.data_editor(
             recepcion_editor,
             use_container_width=True,
             hide_index=True,
-            disabled=["ID", "Pallet", "Bulto", "Artículo", "Descripción", "Unidad", "Cantidad mudada"],
+            disabled=["ID", "Pallet", "Bulto", "Artículo", "Descripción", "Unidad", "Cantidad mudada", "Ubicación Polo", "Recibido por", "Fecha recepción"],
             num_rows="fixed",
             key="recepcion_polo_editor",
         )
 
-        if st.button("Guardar recepción Polo", type="primary"):
+        if st.button("Guardar recepción del pallet", type="primary"):
+            if not str(ubicacion_pallet).strip():
+                st.error("Informá la ubicación del pallet antes de guardar.")
+                st.stop()
+            if not bool(recepcion_editada["OK recepción"].astype(bool).all()):
+                st.error("Hay líneas desmarcadas. Este pallet no se guarda hasta que todo esté OK.")
+                st.stop()
+
             por_id = {int(item.get("item_id", 0)): item for item in st.session_state.pick_items}
             ahora_recepcion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             for row in recepcion_editada.to_dict("records"):
@@ -1986,16 +2001,15 @@ with tab_recepcion:
                 item = por_id.get(item_id)
                 if not item:
                     continue
-                ubicacion_polo = str(row.get("Ubicación Polo", "")).strip().upper()
+                ubicacion_polo = str(ubicacion_pallet).strip().upper()
                 item["cantidad_recibida"] = numero_seguro(row.get("Cantidad recibida", item.get("cantidad_mudada", 0)), 0)
-                item["recepcion_ok"] = bool(row.get("OK recepción", False))
+                item["recepcion_ok"] = True
                 item["ubicacion_recepcion"] = ubicacion_polo
-                if ubicacion_polo:
-                    item["ubicacion"] = ubicacion_polo
-                item["receptor"] = str(row.get("Recibido por", "")).strip()
-                item["fecha_recepcion"] = str(row.get("Fecha recepción", "")).strip() or ahora_recepcion
+                item["ubicacion"] = ubicacion_polo
+                item["receptor"] = str(receptor_pallet).strip()
+                item["fecha_recepcion"] = ahora_recepcion
                 item["observaciones_recepcion"] = str(row.get("Observaciones recepción", "")).strip()
-            st.success("Recepción guardada y ubicación actualizada.")
+            st.success(f"Pallet {pallet_recepcion} recibido OK y ubicación actualizada.")
             st.rerun()
 
         recepcion_actual = preparar_recepcion_polo(df_pick)
