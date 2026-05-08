@@ -386,6 +386,8 @@ def inicializar_estado() -> None:
             item["cantidad_bultos"] = item.get("bultos_pallet", 1)
         if "ubicacion" not in item:
             item["ubicacion"] = str(item.get("bultos_item", "")).strip().upper()
+        if not str(item.get("ubicacion", "")).strip():
+            item["ubicacion"] = "PENDIENTE"
 
 
 def cantidad_pickeada_por_codigo(codigo_normalizado: str) -> float:
@@ -448,6 +450,7 @@ def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
     trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
     trabajo["stock_total"] = pd.to_numeric(trabajo["stock_total"], errors="coerce").fillna(0)
     trabajo["ubicacion"] = trabajo["ubicacion"].fillna("").astype(str).str.strip().str.upper()
+    trabajo.loc[trabajo["ubicacion"] == "", "ubicacion"] = "PENDIENTE"
     return trabajo
 
 def agregar_item_a_mudanza(
@@ -468,9 +471,6 @@ def agregar_item_a_mudanza(
     if cantidad_mudada <= 0:
         return False, "La cantidad a mudar tiene que ser mayor a cero."
 
-    if not str(ubicacion).strip():
-        return False, "Falta completar la ubicación. Ejemplo: 1-L-3."
-
     if ya_pickeado + float(cantidad_mudada) > stock_total:
         disponible = max(stock_total - ya_pickeado, 0)
         return (
@@ -489,7 +489,7 @@ def agregar_item_a_mudanza(
             "deposito_destino": deposito_destino.strip() or "POLO LOGISTICO",
             "pallet": int(pallet),
             "cantidad_bultos": int(cantidad_bultos),
-            "ubicacion": str(ubicacion).strip().upper(),
+            "ubicacion": str(ubicacion).strip().upper() or "PENDIENTE",
             "lectura_scanner": str(lectura_original).strip(),
             "articulo": str(row.get("articulo", "")).strip(),
             "descripcion": str(row.get("descripcion", "")).strip(),
@@ -502,6 +502,15 @@ def agregar_item_a_mudanza(
         }
     )
     return True, "Artículo agregado a la mudanza."
+
+
+def actualizar_ubicacion_item(item_id: int, nueva_ubicacion: str) -> Tuple[bool, str]:
+    ubicacion = str(nueva_ubicacion).strip().upper() or "PENDIENTE"
+    for item in st.session_state.pick_items:
+        if int(item.get("item_id", 0)) == int(item_id):
+            item["ubicacion"] = ubicacion
+            return True, "Ubicación actualizada."
+    return False, "No encontré esa línea de mudanza."
 
 
 def pick_items_df() -> pd.DataFrame:
@@ -896,7 +905,11 @@ with st.sidebar:
     deposito_destino = st.text_input("Depósito destino", value="POLO LOGISTICO")
     pallet_activo = st.number_input("Pallet activo", min_value=1, value=1, step=1)
     cantidad_bultos_activo = st.number_input("Cantidad de bultos del pallet", min_value=1, value=1, step=1)
-    ubicacion_default = st.text_input("Ubicación base", value=f"{int(pallet_activo)}-L-", help="Ejemplo final: 1-L-3")
+    ubicacion_default = st.text_input(
+        "Ubicación base opcional",
+        value="",
+        help="Podés dejarla vacía al cargar la mudanza y completarla cuando llegue al Polo. Ejemplo final: 1-L-3",
+    )
 
     st.markdown("---")
     if st.button("🧹 Vaciar mudanza actual", type="secondary"):
@@ -1004,7 +1017,7 @@ with tab_buscar:
                         cantidad_mudar = c1.number_input("Cantidad a mudar", min_value=1.0, max_value=float(disponible), value=1.0, step=1.0)
                         pallet = c2.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1)
                         cantidad_bultos = c3.number_input("Cantidad de bultos", min_value=1, value=int(cantidad_bultos_activo), step=1)
-                        ubicacion = c4.text_input("Ubicación", value=str(ubicacion_default), placeholder="Ej: 1-L-3")
+                        ubicacion = c4.text_input("Ubicación en Polo", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
                         observaciones = st.text_input("Observaciones", placeholder="Opcional")
                         submit = st.form_submit_button("Agregar a mudanza", type="primary")
 
@@ -1084,6 +1097,27 @@ with tab_pallets:
         )
     else:
         st.info("Todavía no hay artículos agregados a la mudanza.")
+
+    st.markdown("---")
+    st.subheader("Completar ubicación al llegar al Polo")
+    if df_pick.empty:
+        st.caption("No hay líneas pendientes para ubicar.")
+    else:
+        opciones_ubicacion = [
+            f"{r.item_id}) Pallet {r.pallet} | {r.ubicacion} | {r.articulo} | Cant. {r.cantidad_mudada}"
+            for r in df_pick.itertuples()
+        ]
+        linea_ubicacion = st.selectbox("Línea a actualizar", opciones_ubicacion)
+        id_ubicacion = int(linea_ubicacion.split(")", 1)[0])
+        ubicacion_actual = str(df_pick.loc[df_pick["item_id"] == id_ubicacion, "ubicacion"].iloc[0])
+        nueva_ubicacion = st.text_input("Nueva ubicación en Polo", value="" if ubicacion_actual == "PENDIENTE" else ubicacion_actual, placeholder="Ej: 1-L-3")
+        if st.button("Guardar ubicación"):
+            ok, msg = actualizar_ubicacion_item(id_ubicacion, nueva_ubicacion)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
 
     st.markdown("---")
     st.subheader("Corregir / quitar líneas")
