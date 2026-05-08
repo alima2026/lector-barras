@@ -5,6 +5,12 @@ from typing import Dict, List, Tuple
 
 import pandas as pd
 import streamlit as st
+from reportlab.graphics.barcode import code128
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
 # ==========================================================
@@ -384,6 +390,8 @@ def inicializar_estado() -> None:
     for item in st.session_state.pick_items:
         if "cantidad_bultos" not in item:
             item["cantidad_bultos"] = item.get("bultos_pallet", 1)
+        if "bulto" not in item:
+            item["bulto"] = 1
         if "ubicacion" not in item:
             item["ubicacion"] = str(item.get("bultos_item", "")).strip().upper()
         if not str(item.get("ubicacion", "")).strip():
@@ -431,6 +439,7 @@ def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
         "deposito_origen": "DARKINEL",
         "deposito_destino": "POLO LOGISTICO",
         "pallet": 1,
+        "bulto": 1,
         "lectura_scanner": "",
         "articulo": "",
         "descripcion": "",
@@ -447,6 +456,7 @@ def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
 
     trabajo["cantidad_bultos"] = pd.to_numeric(trabajo["cantidad_bultos"], errors="coerce").fillna(1).astype(int)
     trabajo["pallet"] = pd.to_numeric(trabajo["pallet"], errors="coerce").fillna(1).astype(int)
+    trabajo["bulto"] = pd.to_numeric(trabajo["bulto"], errors="coerce").fillna(1).astype(int)
     trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
     trabajo["stock_total"] = pd.to_numeric(trabajo["stock_total"], errors="coerce").fillna(0)
     trabajo["ubicacion"] = trabajo["ubicacion"].fillna("").astype(str).str.strip().str.upper()
@@ -459,6 +469,7 @@ def agregar_item_a_mudanza(
     cantidad_mudada: float,
     pallet: int,
     cantidad_bultos: int,
+    bulto: int,
     ubicacion: str,
     deposito_origen: str,
     deposito_destino: str,
@@ -489,6 +500,7 @@ def agregar_item_a_mudanza(
             "deposito_destino": deposito_destino.strip() or "POLO LOGISTICO",
             "pallet": int(pallet),
             "cantidad_bultos": int(cantidad_bultos),
+            "bulto": int(bulto),
             "ubicacion": str(ubicacion).strip().upper() or "PENDIENTE",
             "lectura_scanner": str(lectura_original).strip(),
             "articulo": str(row.get("articulo", "")).strip(),
@@ -545,6 +557,7 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
                 "Depósito destino",
                 "Pallet",
                 "Cantidad de bultos",
+                "Bulto",
                 "Ubicación",
                 "Lectura scanner",
                 "Artículo",
@@ -566,6 +579,7 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
         "deposito_destino",
         "pallet",
         "cantidad_bultos",
+        "bulto",
         "ubicacion",
         "lectura_scanner",
         "articulo",
@@ -585,6 +599,7 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
             "deposito_destino": "Depósito destino",
             "pallet": "Pallet",
             "cantidad_bultos": "Cantidad de bultos",
+            "bulto": "Bulto",
             "ubicacion": "Ubicación",
             "lectura_scanner": "Lectura scanner",
             "articulo": "Artículo",
@@ -872,6 +887,114 @@ def nombre_archivo_control() -> str:
     return f"control_depositos_darkinel_polo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
 
 
+def _barcode_articulo_flowable(articulo: str):
+    codigo = str(articulo).strip()
+    if not codigo:
+        codigo = "SIN-CODIGO"
+    return code128.Code128(codigo, barHeight=12 * mm, barWidth=0.33 * mm, humanReadable=True)
+
+
+def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "pallet") -> bytes:
+    trabajo = normalizar_df_pick(df_pick)
+    if trabajo.empty:
+        return b""
+
+    trabajo = trabajo[pd.to_numeric(trabajo["pallet"], errors="coerce").fillna(0).astype(int) == int(pallet)].copy()
+    if trabajo.empty:
+        return b""
+
+    trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
+    cantidad_bultos = int(pd.to_numeric(trabajo["cantidad_bultos"], errors="coerce").fillna(1).max())
+    unidades = formatear_numero(trabajo["cantidad_mudada"].sum())
+    codigos_distintos = int(trabajo["codigo_normalizado"].nunique())
+    fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    output = io.BytesIO()
+    doc = SimpleDocTemplate(
+        output,
+        pagesize=A4,
+        rightMargin=10 * mm,
+        leftMargin=10 * mm,
+        topMargin=10 * mm,
+        bottomMargin=10 * mm,
+    )
+    styles = getSampleStyleSheet()
+    story = []
+
+    paginas = list(range(1, cantidad_bultos + 1)) if modo == "bultos" else [None]
+
+    for idx, bulto in enumerate(paginas):
+        titulo = f"PALLET {int(pallet)}"
+        subtitulo = f"BULTO {bulto} DE {cantidad_bultos}" if bulto is not None else f"BULTOS: {cantidad_bultos}"
+
+        header = Table(
+            [
+                [
+                    Paragraph(f"<b>{titulo}</b>", styles["Title"]),
+                    Paragraph(f"<b>{subtitulo}</b><br/>Codigos: {codigos_distintos}<br/>Unidades: {unidades}<br/>Fecha: {fecha}", styles["Normal"]),
+                ]
+            ],
+            colWidths=[95 * mm, 95 * mm],
+        )
+        header.setStyle(
+            TableStyle(
+                [
+                    ("BOX", (0, 0), (-1, -1), 1.2, colors.black),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (-1, -1), 8),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                ]
+            )
+        )
+        story.append(header)
+        story.append(Spacer(1, 6 * mm))
+
+        trabajo_pagina = trabajo[trabajo["bulto"] == int(bulto)].copy() if bulto is not None else trabajo
+        rows = [["Articulo", "Descripcion", "Cant.", "Codigo de barras"]]
+        for r in trabajo_pagina.sort_values(["articulo", "descripcion"]).itertuples():
+            articulo = str(getattr(r, "articulo", "")).strip()
+            descripcion = str(getattr(r, "descripcion", "")).strip()
+            cantidad = formatear_numero(getattr(r, "cantidad_mudada", 0))
+            rows.append(
+                [
+                    Paragraph(articulo, styles["Normal"]),
+                    Paragraph(descripcion[:80], styles["Normal"]),
+                    Paragraph(str(cantidad), styles["Normal"]),
+                    _barcode_articulo_flowable(articulo),
+                ]
+            )
+
+        if len(rows) == 1:
+            rows.append(["", "Sin articulos cargados para este bulto", "", ""])
+
+        tabla = Table(rows, colWidths=[35 * mm, 72 * mm, 18 * mm, 65 * mm], repeatRows=1)
+        tabla.setStyle(
+            TableStyle(
+                [
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.lightgrey),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.black),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]
+            )
+        )
+        story.append(tabla)
+
+        if idx < len(paginas) - 1:
+            story.append(PageBreak())
+
+    doc.build(story)
+    return output.getvalue()
+
+
 def limpiar_mudanza_actual() -> None:
     st.session_state.pick_items = []
     st.session_state.pick_seq = 0
@@ -905,6 +1028,7 @@ with st.sidebar:
     deposito_destino = st.text_input("Depósito destino", value="POLO LOGISTICO")
     pallet_activo = st.number_input("Pallet activo", min_value=1, value=1, step=1)
     cantidad_bultos_activo = st.number_input("Cantidad de bultos del pallet", min_value=1, value=1, step=1)
+    bulto_activo = st.number_input("Bulto activo", min_value=1, max_value=int(cantidad_bultos_activo), value=1, step=1)
     ubicacion_default = st.text_input(
         "Ubicación base opcional",
         value="",
@@ -1013,11 +1137,12 @@ with tab_buscar:
                     st.warning("Este código ya quedó totalmente marcado para mudanza en los pallets actuales.")
                 else:
                     with st.form("form_agregar_un_codigo"):
-                        c1, c2, c3, c4 = st.columns(4)
+                        c1, c2, c3, c4, c5 = st.columns(5)
                         cantidad_mudar = c1.number_input("Cantidad a mudar", min_value=1.0, max_value=float(disponible), value=1.0, step=1.0)
                         pallet = c2.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1)
                         cantidad_bultos = c3.number_input("Cantidad de bultos", min_value=1, value=int(cantidad_bultos_activo), step=1)
-                        ubicacion = c4.text_input("Ubicación en Polo", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
+                        bulto = c4.number_input("Bulto", min_value=1, max_value=int(cantidad_bultos), value=min(int(bulto_activo), int(cantidad_bultos)), step=1)
+                        ubicacion = c5.text_input("Ubicación en Polo", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
                         observaciones = st.text_input("Observaciones", placeholder="Opcional")
                         submit = st.form_submit_button("Agregar a mudanza", type="primary")
 
@@ -1028,6 +1153,7 @@ with tab_buscar:
                             cantidad_mudada=cantidad_mudar,
                             pallet=pallet,
                             cantidad_bultos=cantidad_bultos,
+                            bulto=bulto,
                             ubicacion=ubicacion,
                             deposito_origen=deposito_origen,
                             deposito_destino=deposito_destino,
@@ -1081,6 +1207,7 @@ with tab_buscar:
                             cantidad_mudada=1,
                             pallet=int(pallet_activo),
                             cantidad_bultos=int(cantidad_bultos_activo),
+                            bulto=int(bulto_activo),
                             ubicacion=ubicacion_default,
                             deposito_origen=deposito_origen,
                             deposito_destino=deposito_destino,
@@ -1124,6 +1251,22 @@ with tab_pallets:
             file_name=f"detalle_mudanza_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
             mime="text/csv",
         )
+
+        st.markdown("---")
+        st.subheader("Hoja A4 con codigos de barras")
+        pallets_disponibles = sorted(pd.to_numeric(df_pick["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
+        c_pdf1, c_pdf2 = st.columns(2)
+        pallet_pdf = c_pdf1.selectbox("Pallet para imprimir", pallets_disponibles)
+        modo_pdf = c_pdf2.radio("Formato", ["Una hoja por pallet", "Una hoja por bulto"], horizontal=True)
+        modo_pdf_interno = "bultos" if modo_pdf == "Una hoja por bulto" else "pallet"
+        pdf_bytes = generar_pdf_pallet_bultos(df_pick, pallet_pdf, modo_pdf_interno)
+        st.download_button(
+            "Descargar A4 pallet / bultos PDF",
+            data=pdf_bytes,
+            file_name=f"pallet_{int(pallet_pdf)}_{modo_pdf_interno}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+            mime="application/pdf",
+            type="primary",
+        )
     else:
         st.info("Todavía no hay artículos agregados a la mudanza.")
 
@@ -1133,7 +1276,7 @@ with tab_pallets:
         st.caption("No hay líneas pendientes para ubicar.")
     else:
         opciones_ubicacion = [
-            f"{r.item_id}) Pallet {r.pallet} | {r.ubicacion} | {r.articulo} | Cant. {r.cantidad_mudada}"
+            f"{r.item_id}) Pallet {r.pallet} | Bulto {r.bulto} | {r.ubicacion} | {r.articulo} | Cant. {r.cantidad_mudada}"
             for r in df_pick.itertuples()
         ]
         linea_ubicacion = st.selectbox("Línea a actualizar", opciones_ubicacion)
@@ -1153,7 +1296,7 @@ with tab_pallets:
     if df_pick.empty:
         st.caption("No hay líneas para quitar.")
     else:
-        opciones_quitar = [f"{r.item_id}) Pallet {r.pallet} | {r.ubicacion} | {r.articulo} | Cant. {r.cantidad_mudada}" for r in df_pick.itertuples()]
+        opciones_quitar = [f"{r.item_id}) Pallet {r.pallet} | Bulto {r.bulto} | {r.ubicacion} | {r.articulo} | Cant. {r.cantidad_mudada}" for r in df_pick.itertuples()]
         quitar = st.multiselect("Líneas para quitar", opciones_quitar)
         if st.button("Quitar líneas seleccionadas") and quitar:
             ids = {int(x.split(")", 1)[0]) for x in quitar}
