@@ -2427,14 +2427,10 @@ with tab_buscar:
                 sugerencias = buscar_sugerencias(stock_consolidado, info["candidatos"])
                 if sugerencias.empty:
                     st.info("No hay sugerencias para esa lectura.")
-                    mejor_puntaje = 0
                 else:
                     st.dataframe(preparar_resultado_para_mostrar(sugerencias), use_container_width=True, hide_index=True)
-                    mejor_puntaje = int(pd.to_numeric(sugerencias.get("puntaje", pd.Series([0])).max(), errors="coerce") or 0)
-                exactos = sugerencias
-                permitir_agregar_desde_base = mejor_puntaje >= 90
-                if not permitir_agregar_desde_base:
-                    st.info("La sugerencia no es suficientemente cercana. Ingresalo manualmente para evitar cargar un artículo equivocado.")
+                permitir_agregar_desde_base = False
+                st.info("Las sugerencias son solo referencia. Si el código no existe exacto en stock, cargalo como artículo nuevo/manual.")
 
             if permitir_agregar_desde_base and not exactos.empty:
                 st.subheader("Agregar a mudanza")
@@ -2559,8 +2555,20 @@ with tab_buscar:
                 exactos, info = buscar_exactos(stock_consolidado, linea)
                 if exactos.empty:
                     sugerencias = buscar_sugerencias(stock_consolidado, info["candidatos"], limite=1)
-                    base = sugerencias
-                    tipo = "Sugerencia"
+                    if sugerencias.empty:
+                        filas.append({"Lectura": linea, "Resultado": "Sin exacto - cargar manual", "Artículo": linea.strip().upper(), "Descripción": "", "Stock total": ""})
+                    else:
+                        row_sug = sugerencias.iloc[0]
+                        filas.append(
+                            {
+                                "Lectura": linea,
+                                "Resultado": "Sugerencia no agregada",
+                                "Artículo": row_sug.get("articulo", ""),
+                                "Descripción": row_sug.get("descripcion", ""),
+                                "Stock total": row_sug.get("cantidad", ""),
+                            }
+                        )
+                    continue
                 else:
                     base = exactos
                     tipo = "Exacto"
