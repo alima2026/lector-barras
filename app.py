@@ -1306,6 +1306,19 @@ def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFr
 
 
 def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.DataFrame) -> pd.DataFrame:
+    columnas = [
+        "Fecha/Hora",
+        "Depósito origen",
+        "Depósito destino",
+        "Pallet",
+        "Cantidad de cajas",
+        "Ubicación",
+        "Artículo",
+        "Descripción",
+        "Piezas",
+        "Código normalizado",
+        "Observaciones",
+    ]
     detalle = preparar_detalle_mudanza(df_pick)
     if not detalle.empty:
         detalle = detalle[
@@ -1324,11 +1337,75 @@ def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.D
             ]
         ].rename(columns={"Piezas enviadas": "Piezas"})
 
+    partes_ubicacion = []
     if ubicaciones_anteriores is not None and not ubicaciones_anteriores.empty:
-        combinado = pd.concat([ubicaciones_anteriores, detalle], ignore_index=True)
-    else:
-        combinado = detalle
-    return combinado
+        anterior = ubicaciones_anteriores.copy()
+        anterior["_fuente_actual"] = 0
+        partes_ubicacion.append(anterior)
+    if detalle is not None and not detalle.empty:
+        actual = detalle.copy()
+        actual["_fuente_actual"] = 1
+        partes_ubicacion.append(actual)
+
+    combinado = pd.concat(partes_ubicacion, ignore_index=True) if partes_ubicacion else pd.DataFrame(columns=columnas)
+
+    if combinado is None or combinado.empty:
+        return pd.DataFrame(columns=columnas)
+
+    for col in columnas:
+        if col not in combinado.columns:
+            combinado[col] = ""
+    if "_fuente_actual" not in combinado.columns:
+        combinado["_fuente_actual"] = 0
+    combinado = combinado[columnas + ["_fuente_actual"]].copy()
+
+    texto_cols = [
+        "Fecha/Hora",
+        "Depósito origen",
+        "Depósito destino",
+        "Ubicación",
+        "Artículo",
+        "Descripción",
+        "Código normalizado",
+        "Observaciones",
+    ]
+    for col in texto_cols:
+        combinado[col] = combinado[col].fillna("").astype(str).str.strip()
+
+    combinado["Pallet"] = pd.to_numeric(combinado["Pallet"], errors="coerce").fillna(0).astype(int)
+    combinado["Cantidad de cajas"] = pd.to_numeric(combinado["Cantidad de cajas"], errors="coerce").fillna(0).astype(int)
+    combinado["Piezas"] = pd.to_numeric(combinado["Piezas"], errors="coerce").fillna(0)
+
+    ubicacion_upper = combinado["Ubicación"].astype(str).str.strip().str.upper()
+    combinado["_ubicacion_real"] = (~ubicacion_upper.isin(["", "PENDIENTE", "NAN"])).astype(int)
+    combinado["_fuente_actual"] = pd.to_numeric(combinado["_fuente_actual"], errors="coerce").fillna(0).astype(int)
+    combinado["_orden_original"] = range(len(combinado))
+
+    claves_linea = [
+        "Fecha/Hora",
+        "Depósito origen",
+        "Depósito destino",
+        "Pallet",
+        "Cantidad de cajas",
+        "Artículo",
+        "Descripción",
+        "Piezas",
+        "Observaciones",
+    ]
+    combinado["_ocurrencia"] = combinado.groupby(claves_linea + ["_fuente_actual"], dropna=False).cumcount()
+    claves_unicas = claves_linea + ["_ocurrencia"]
+
+    combinado = (
+        combinado.sort_values(["_fuente_actual", "_ubicacion_real", "_orden_original"], ascending=[False, False, False])
+        .drop_duplicates(claves_unicas, keep="first")
+        .sort_values(["Pallet", "Cantidad de cajas", "Fecha/Hora", "Artículo", "_orden_original"])
+        .drop(columns=["_fuente_actual", "_ubicacion_real", "_orden_original", "_ocurrencia"], errors="ignore")
+        .reset_index(drop=True)
+    )
+    combinado["Pallet"] = combinado["Pallet"].replace(0, "")
+    combinado["Cantidad de cajas"] = combinado["Cantidad de cajas"].replace(0, "")
+    combinado["Piezas"] = combinado["Piezas"].apply(formatear_numero)
+    return combinado[columnas]
 
 
 def historial_mudanzas(df_pick: pd.DataFrame, historial_anterior: pd.DataFrame) -> pd.DataFrame:
