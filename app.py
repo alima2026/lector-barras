@@ -2502,10 +2502,27 @@ with tab_recepcion:
         pallets_recepcion = sorted(pd.to_numeric(trabajo_recepcion["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
         pr1, pr2, pr3 = st.columns([1, 1.5, 1.5])
         pallet_recepcion = pr1.selectbox("Pallet a recibir", pallets_recepcion)
-        ubicacion_pallet = pr2.text_input("Ubicación única del pallet", placeholder="Ej: 1-L-3")
+        lineas_pallet_recepcion = trabajo_recepcion[trabajo_recepcion["pallet"] == int(pallet_recepcion)].copy()
+        ubicaciones_existentes = (
+            lineas_pallet_recepcion["ubicacion_recepcion"]
+            .where(lineas_pallet_recepcion["ubicacion_recepcion"].astype(str).str.strip() != "", lineas_pallet_recepcion["ubicacion"])
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+        ubicaciones_reales = [u for u in ubicaciones_existentes.unique().tolist() if u and u not in ["PENDIENTE", "NAN"]]
+        ubicacion_sugerida = ubicaciones_reales[0] if len(ubicaciones_reales) == 1 else ""
+        ubicacion_pallet = pr2.text_input("Ubicación única del pallet", value=ubicacion_sugerida, placeholder="Ej: 1-L-3")
         receptor_pallet = pr3.text_input("Recibido por", placeholder="Nombre")
 
-        recepcion_editor = trabajo_recepcion[trabajo_recepcion["pallet"] == int(pallet_recepcion)][
+        recepcion_base = lineas_pallet_recepcion.copy()
+        recepcion_base["ubicacion_recepcion"] = recepcion_base["ubicacion_recepcion"].where(
+            recepcion_base["ubicacion_recepcion"].astype(str).str.strip() != "",
+            recepcion_base["ubicacion"],
+        )
+
+        recepcion_editor = recepcion_base[
             [
                 "item_id",
                 "pallet",
