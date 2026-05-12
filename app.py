@@ -2,12 +2,22 @@ import io
 import json
 import re
 import sqlite3
+import base64
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
+from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
+
+try:
+    import requests
+
+    REQUESTS_DISPONIBLE = True
+except ModuleNotFoundError:
+    REQUESTS_DISPONIBLE = False
 
 try:
     from reportlab.graphics.barcode import code128
@@ -39,6 +49,102 @@ st.set_page_config(
 # Normalización de códigos
 # -----------------------------
 DB_PATH = Path(__file__).resolve().parent / "data" / "mudanza_estado.sqlite"
+CLOUD_TABLE = "estado_app"
+
+
+def ahora_texto() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def supabase_config() -> Dict[str, str]:
+    try:
+        cfg = st.secrets.get("supabase", {})
+    except Exception:
+        cfg = {}
+    url = str(cfg.get("url", "")).strip().rstrip("/")
+    key = str(cfg.get("service_role_key") or cfg.get("anon_key") or cfg.get("key", "")).strip()
+    table = str(cfg.get("table", CLOUD_TABLE)).strip() or CLOUD_TABLE
+    return {"url": url, "key": key, "table": table}
+
+
+def nube_disponible() -> bool:
+    cfg = supabase_config()
+    return bool(REQUESTS_DISPONIBLE and cfg["url"] and cfg["key"])
+
+
+def supabase_headers(prefer: str = "") -> Dict[str, str]:
+    cfg = supabase_config()
+    headers = {
+        "apikey": cfg["key"],
+        "Authorization": f"Bearer {cfg['key']}",
+        "Content-Type": "application/json",
+    }
+    if prefer:
+        headers["Prefer"] = prefer
+    return headers
+
+
+def supabase_endpoint(clave: str = "") -> str:
+    cfg = supabase_config()
+    base = f"{cfg['url']}/rest/v1/{cfg['table']}"
+    if clave:
+        return f"{base}?clave=eq.{quote(clave)}"
+    return base
+
+
+def guardar_estado_nube(clave: str, valor) -> bool:
+    if not nube_disponible():
+        return False
+    try:
+        payload = {
+            "clave": clave,
+            "valor": json.dumps(valor, ensure_ascii=False, default=str),
+            "actualizado_en": ahora_texto(),
+        }
+        resp = requests.post(
+            supabase_endpoint(),
+            headers=supabase_headers("resolution=merge-duplicates"),
+            json=payload,
+            timeout=20,
+        )
+        resp.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
+def cargar_estado_nube(clave: str, defecto):
+    if not nube_disponible():
+        return defecto
+    try:
+        resp = requests.get(
+            f"{supabase_endpoint(clave)}&select=valor",
+            headers=supabase_headers(),
+            timeout=20,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if not rows:
+            return defecto
+        return json.loads(rows[0]["valor"])
+    except Exception:
+        return defecto
+
+
+def fecha_estado_nube(clave: str) -> str:
+    if not nube_disponible():
+        return ""
+    try:
+        resp = requests.get(
+            f"{supabase_endpoint(clave)}&select=actualizado_en",
+            headers=supabase_headers(),
+            timeout=20,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        return "" if not rows else str(rows[0].get("actualizado_en", ""))
+    except Exception:
+        return ""
 
 
 def conectar_db() -> sqlite3.Connection:
@@ -59,7 +165,7 @@ def conectar_db() -> sqlite3.Connection:
 def guardar_estado_db(clave: str, valor) -> None:
     try:
         payload = json.dumps(valor, ensure_ascii=False, default=str)
-        ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ahora = ahora_texto()
         with conectar_db() as conn:
             conn.execute(
                 """
@@ -71,9 +177,13 @@ def guardar_estado_db(clave: str, valor) -> None:
             )
     except Exception:
         pass
+    guardar_estado_nube(clave, valor)
 
 
 def cargar_estado_db(clave: str, defecto):
+    estado_nube = cargar_estado_nube(clave, None)
+    if estado_nube is not None:
+        return estado_nube
     try:
         with conectar_db() as conn:
             row = conn.execute("SELECT valor FROM estado_app WHERE clave = ?", (clave,)).fetchone()
@@ -85,6 +195,9 @@ def cargar_estado_db(clave: str, defecto):
 
 
 def fecha_estado_db(clave: str) -> str:
+    fecha_nube = fecha_estado_nube(clave)
+    if fecha_nube:
+        return fecha_nube
     try:
         with conectar_db() as conn:
             row = conn.execute("SELECT actualizado_en FROM estado_app WHERE clave = ?", (clave,)).fetchone()
@@ -110,6 +223,41 @@ def cargar_mudanza_actual_db() -> Dict[str, object]:
     estado.setdefault("pick_items", [])
     estado.setdefault("pick_seq", 0)
     return estado
+
+
+def guardar_archivo_estado(clave: str, nombre: str, contenido: bytes) -> None:
+    guardar_estado_db(
+        clave,
+        {
+            "nombre": nombre,
+            "contenido_b64": base64.b64encode(contenido).decode("ascii"),
+        },
+    )
+
+
+def cargar_archivo_estado(clave: str) -> Dict[str, object]:
+    estado = cargar_estado_db(clave, {})
+    if not isinstance(estado, dict) or not estado.get("contenido_b64"):
+        return {}
+    try:
+        return {
+            "nombre": str(estado.get("nombre", "")),
+            "contenido": base64.b64decode(str(estado["contenido_b64"])),
+        }
+    except Exception:
+        return {}
+
+
+def firma_archivo(nombre: str, contenido: bytes) -> str:
+    return f"{nombre}:{len(contenido)}:{hashlib.sha256(contenido).hexdigest()}"
+
+
+def guardar_archivo_si_cambio(clave: str, nombre: str, contenido: bytes) -> None:
+    session_key = f"firma_{clave}"
+    firma = firma_archivo(nombre, contenido)
+    if st.session_state.get(session_key) != firma:
+        guardar_archivo_estado(clave, nombre, contenido)
+        st.session_state[session_key] = firma
 
 
 def normalizar_codigo(valor) -> str:
@@ -1643,7 +1791,24 @@ st.caption(
 
 with st.sidebar:
     st.header("Base de stock")
+    if nube_disponible():
+        st.success("Base en nube conectada")
+    else:
+        st.warning("Sin nube: guardado local SQLite")
+        st.caption("Para compartir datos entre usuarios en Streamlit Cloud, configura Supabase en Secrets.")
     uploaded = st.file_uploader("Subí el archivo de stock de DARKINEL", type=["xls", "xlsx", "xlsm", "csv"])
+
+    stock_guardado_sidebar = cargar_archivo_estado("stock_darkinel_actual")
+    if stock_guardado_sidebar:
+        st.caption(f"Stock guardado: {stock_guardado_sidebar.get('nombre', 'archivo')} | {fecha_estado_db('stock_darkinel_actual')}")
+        if uploaded is not None and st.button("Guardar este stock ahora"):
+            guardar_archivo_estado("stock_darkinel_actual", uploaded.name, uploaded.getvalue())
+            st.success("Stock guardado.")
+            st.rerun()
+    elif uploaded is not None and st.button("Guardar este stock ahora"):
+        guardar_archivo_estado("stock_darkinel_actual", uploaded.name, uploaded.getvalue())
+        st.success("Stock guardado.")
+        st.rerun()
 
     st.markdown("---")
     st.subheader("Base Polo anterior opcional")
@@ -1654,6 +1819,23 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    polo_guardado_sidebar = cargar_archivo_estado("control_polo_actual")
+    usar_polo_guardado = False
+    if polo_guardado_sidebar:
+        usar_polo_guardado = st.checkbox(
+            f"Usar control Polo guardado ({polo_guardado_sidebar.get('nombre', 'archivo')})",
+            value=uploaded_polo is None,
+        )
+        st.caption(f"Control Polo guardado: {fecha_estado_db('control_polo_actual')}")
+        if uploaded_polo is not None and st.button("Guardar este control Polo ahora"):
+            guardar_archivo_estado("control_polo_actual", uploaded_polo.name, uploaded_polo.getvalue())
+            st.success("Control Polo guardado.")
+            st.rerun()
+    elif uploaded_polo is not None and st.button("Guardar este control Polo ahora"):
+        guardar_archivo_estado("control_polo_actual", uploaded_polo.name, uploaded_polo.getvalue())
+        st.success("Control Polo guardado.")
+        st.rerun()
+
     st.subheader("Datos de mudanza")
     deposito_origen = st.text_input("Depósito origen", value="DARKINEL")
     deposito_destino = st.text_input("Depósito destino", value="POLO LOGISTICO")
@@ -1684,12 +1866,21 @@ with st.sidebar:
         language="text",
     )
 
-if uploaded is None:
+stock_guardado = cargar_archivo_estado("stock_darkinel_actual")
+if uploaded is not None:
+    stock_bytes = uploaded.getvalue()
+    stock_filename = uploaded.name
+    guardar_archivo_si_cambio("stock_darkinel_actual", stock_filename, stock_bytes)
+elif stock_guardado:
+    stock_bytes = stock_guardado["contenido"]
+    stock_filename = stock_guardado.get("nombre", "stock_guardado.xlsx")
+    st.info(f"Usando stock guardado en la base: {stock_filename}")
+else:
     st.info("Subí el Excel de stock de DARKINEL para empezar.")
     st.stop()
 
 try:
-    stock_df = cargar_stock(uploaded.getvalue(), uploaded.name)
+    stock_df = cargar_stock(stock_bytes, stock_filename)
 except ImportError as e:
     st.error("No se pudo leer el archivo .xls porque falta la librería xlrd.")
     st.code("xlrd>=2.0.1", language="text")
@@ -1706,15 +1897,23 @@ if stock_df.empty:
 
 stock_consolidado = consolidar_por_codigo(stock_df)
 
+polo_guardado = cargar_archivo_estado("control_polo_actual")
 if uploaded_polo is not None:
-    stock_polo_anterior, ubicaciones_anteriores, historial_anterior, detalle_mudanza_anterior = leer_base_polo_anterior(uploaded_polo.getvalue(), uploaded_polo.name)
+    polo_bytes = uploaded_polo.getvalue()
+    polo_filename = uploaded_polo.name
+    guardar_archivo_si_cambio("control_polo_actual", polo_filename, polo_bytes)
+    stock_polo_anterior, ubicaciones_anteriores, historial_anterior, detalle_mudanza_anterior = leer_base_polo_anterior(polo_bytes, polo_filename)
+elif polo_guardado and usar_polo_guardado:
+    polo_bytes = polo_guardado["contenido"]
+    polo_filename = polo_guardado.get("nombre", "control_polo_guardado.xlsx")
+    stock_polo_anterior, ubicaciones_anteriores, historial_anterior, detalle_mudanza_anterior = leer_base_polo_anterior(polo_bytes, polo_filename)
 else:
     stock_polo_anterior, ubicaciones_anteriores, historial_anterior, detalle_mudanza_anterior = pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 df_pick = pick_items_df()
 df_reimpresion = detalle_excel_a_pick_items(detalle_mudanza_anterior)
 
-if uploaded_polo is not None and not df_reimpresion.empty:
+if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not df_reimpresion.empty:
     st.info(f"El control anterior cargado trae {len(df_reimpresion)} línea(s) de mudanza.")
     if df_pick.empty:
         if st.button("Usar control anterior como mudanza activa", type="primary"):
