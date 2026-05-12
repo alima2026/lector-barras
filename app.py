@@ -982,6 +982,71 @@ def mostrar_inventario(df: pd.DataFrame) -> pd.DataFrame:
     )[columnas]
 
 
+def formulario_agregar_desde_base(
+    codigo: str,
+    opciones_df: pd.DataFrame,
+    titulo: str,
+    form_key: str,
+    pallet_activo: int,
+    cantidad_bultos_activo: int,
+    bulto_activo: int,
+    ubicacion_default: str,
+    deposito_origen: str,
+    deposito_destino: str,
+) -> None:
+    if opciones_df.empty:
+        return
+    st.subheader(titulo)
+    opciones = []
+    opciones_reset = opciones_df.reset_index(drop=True)
+    for i, row in opciones_reset.iterrows():
+        opciones.append(f"{i + 1}) {row.get('articulo', '')} | {row.get('descripcion', '')} | Stock {row.get('cantidad', 0)}")
+
+    opcion = st.selectbox("Artículo", opciones, key=f"{form_key}_select")
+    idx = opciones.index(opcion)
+    row_sel = opciones_reset.iloc[idx]
+
+    disponible = float(row_sel["cantidad"]) - cantidad_pickeada_por_codigo(row_sel["codigo_normalizado"])
+    disponible = max(disponible, 0)
+
+    if disponible <= 0:
+        st.warning("Este código ya quedó totalmente marcado para mudanza en los pallets actuales.")
+        return
+
+    with st.form(form_key):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        cantidad_mudar = c1.number_input("Piezas a mudar", min_value=1.0, value=1.0, step=1.0, key=f"{form_key}_cantidad")
+        pallet = c2.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1, key=f"{form_key}_pallet")
+        cantidad_bultos = c3.number_input("Cantidad de cajas", min_value=1, value=int(cantidad_bultos_activo), step=1, key=f"{form_key}_cajas")
+        bulto = c4.number_input("Caja", min_value=1, max_value=int(cantidad_bultos), value=min(int(bulto_activo), int(cantidad_bultos)), step=1, key=f"{form_key}_bulto")
+        ubicacion = c5.text_input("Ubicación en Polo", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3", key=f"{form_key}_ubicacion")
+        observaciones = st.text_input("Observaciones", placeholder="Opcional", key=f"{form_key}_obs")
+        submit = st.form_submit_button("Agregar a mudanza", type="primary")
+
+    if submit:
+        ok, msg = agregar_item_a_mudanza(
+            lectura_original=codigo,
+            row=row_sel,
+            cantidad_mudada=cantidad_mudar,
+            pallet=pallet,
+            cantidad_bultos=cantidad_bultos,
+            bulto=bulto,
+            bultos_item="",
+            cantidades_bulto=f"Caja {int(bulto)} = Cantidad {formatear_numero(cantidad_mudar)}",
+            ubicacion=ubicacion,
+            deposito_origen=deposito_origen,
+            deposito_destino=deposito_destino,
+            observaciones=observaciones,
+            validar_stock=False,
+        )
+        if ok:
+            guardar_mudanza_actual_db()
+            st.success(msg)
+            st.rerun()
+        else:
+            st.error(msg)
+
+
 # -----------------------------
 # Picking / mudanza / depósitos
 # -----------------------------
@@ -2422,6 +2487,7 @@ with tab_buscar:
                 st.success(f"Encontré {len(exactos)} artículo(s) con stock consolidado.")
                 st.dataframe(preparar_resultado_para_mostrar(exactos), use_container_width=True, hide_index=True)
                 permitir_agregar_desde_base = True
+                sugerencias = pd.DataFrame()
             else:
                 st.warning("No encontré coincidencia exacta con stock. Te muestro sugerencias posibles.")
                 sugerencias = buscar_sugerencias(stock_consolidado, info["candidatos"])
@@ -2430,57 +2496,35 @@ with tab_buscar:
                 else:
                     st.dataframe(preparar_resultado_para_mostrar(sugerencias), use_container_width=True, hide_index=True)
                 permitir_agregar_desde_base = False
-                st.info("Las sugerencias son solo referencia. Si el código no existe exacto en stock, cargalo como artículo nuevo/manual.")
+                st.info("Elegí una sugerencia si corresponde al artículo leído. Si ninguna sirve, cargalo como artículo nuevo/manual.")
 
             if permitir_agregar_desde_base and not exactos.empty:
-                st.subheader("Agregar a mudanza")
-                opciones = []
-                exactos_reset = exactos.reset_index(drop=True)
-                for i, row in exactos_reset.iterrows():
-                    opciones.append(f"{i + 1}) {row.get('articulo', '')} | {row.get('descripcion', '')} | Stock {row.get('cantidad', 0)}")
+                formulario_agregar_desde_base(
+                    codigo,
+                    exactos,
+                    "Agregar a mudanza",
+                    "form_agregar_un_codigo",
+                    pallet_activo,
+                    cantidad_bultos_activo,
+                    bulto_activo,
+                    ubicacion_default,
+                    deposito_origen,
+                    deposito_destino,
+                )
 
-                opcion = st.selectbox("Artículo", opciones)
-                idx = opciones.index(opcion)
-                row_sel = exactos_reset.iloc[idx]
-
-                disponible = float(row_sel["cantidad"]) - cantidad_pickeada_por_codigo(row_sel["codigo_normalizado"])
-                disponible = max(disponible, 0)
-
-                if disponible <= 0:
-                    st.warning("Este código ya quedó totalmente marcado para mudanza en los pallets actuales.")
-                else:
-                    with st.form("form_agregar_un_codigo"):
-                        c1, c2, c3, c4, c5 = st.columns(5)
-                        cantidad_mudar = c1.number_input("Piezas a mudar", min_value=1.0, value=1.0, step=1.0)
-                        pallet = c2.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1)
-                        cantidad_bultos = c3.number_input("Cantidad de cajas", min_value=1, value=int(cantidad_bultos_activo), step=1)
-                        bulto = c4.number_input("Caja", min_value=1, max_value=int(cantidad_bultos), value=min(int(bulto_activo), int(cantidad_bultos)), step=1)
-                        ubicacion = c5.text_input("Ubicación en Polo", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3")
-                        observaciones = st.text_input("Observaciones", placeholder="Opcional")
-                        submit = st.form_submit_button("Agregar a mudanza", type="primary")
-
-                    if submit:
-                        ok, msg = agregar_item_a_mudanza(
-                            lectura_original=codigo,
-                            row=row_sel,
-                            cantidad_mudada=cantidad_mudar,
-                            pallet=pallet,
-                            cantidad_bultos=cantidad_bultos,
-                            bulto=bulto,
-                            bultos_item="",
-                            cantidades_bulto=f"Caja {int(bulto)} = Cantidad {formatear_numero(cantidad_mudar)}",
-                            ubicacion=ubicacion,
-                            deposito_origen=deposito_origen,
-                            deposito_destino=deposito_destino,
-                            observaciones=observaciones,
-                            validar_stock=False,
-                        )
-                        if ok:
-                            guardar_mudanza_actual_db()
-                            st.success(msg)
-                            st.rerun()
-                        else:
-                            st.error(msg)
+            if not permitir_agregar_desde_base and not sugerencias.empty:
+                formulario_agregar_desde_base(
+                    codigo,
+                    sugerencias,
+                    "Usar una sugerencia",
+                    "form_agregar_sugerencia",
+                    pallet_activo,
+                    cantidad_bultos_activo,
+                    bulto_activo,
+                    ubicacion_default,
+                    deposito_origen,
+                    deposito_destino,
+                )
 
             if not permitir_agregar_desde_base:
                 st.subheader("Agregar articulo manual")
