@@ -2252,6 +2252,8 @@ else:
 
 df_pick = pick_items_df()
 df_reimpresion = detalle_excel_a_pick_items(detalle_mudanza_anterior)
+df_operativo = df_pick if not df_pick.empty else df_reimpresion
+usando_control_anterior = df_pick.empty and not df_reimpresion.empty
 
 if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not df_reimpresion.empty:
     st.info(f"El control anterior cargado trae {len(df_reimpresion)} línea(s) de mudanza.")
@@ -2273,8 +2275,8 @@ if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Códigos con stock", f"{len(stock_consolidado):,}".replace(",", "."))
 col2.metric("Stock total DARKINEL", f"{int(pd.to_numeric(stock_consolidado['cantidad'], errors='coerce').fillna(0).sum()):,}".replace(",", "."))
-col3.metric("Líneas en mudanza", len(df_pick))
-col4.metric("Piezas a mudar", f"{int(pd.to_numeric(df_pick.get('cantidad_mudada', pd.Series(dtype=float)), errors='coerce').fillna(0).sum()):,}".replace(",", "."))
+col3.metric("Líneas en mudanza", len(df_operativo))
+col4.metric("Piezas a mudar", f"{int(pd.to_numeric(df_operativo.get('cantidad_mudada', pd.Series(dtype=float)), errors='coerce').fillna(0).sum()):,}".replace(",", "."))
 
 st.markdown("---")
 
@@ -2489,10 +2491,10 @@ with tab_buscar:
 
 with tab_pallets:
     st.subheader("Composición por pallet")
-    st.dataframe(resumen_pallets(df_pick), use_container_width=True, hide_index=True)
+    st.dataframe(resumen_pallets(df_operativo), use_container_width=True, hide_index=True)
 
     st.subheader("Detalle de mudanza")
-    detalle_display = preparar_detalle_mudanza(df_pick)
+    detalle_display = preparar_detalle_mudanza(df_operativo)
     if df_pick.empty:
         st.dataframe(detalle_display, use_container_width=True, hide_index=True)
     else:
@@ -2577,8 +2579,8 @@ with tab_pallets:
             st.success("Detalle actualizado.")
             st.rerun()
 
-    if not df_pick.empty:
-        excel_bytes = generar_excel_control(stock_consolidado, df_pick, stock_polo_anterior, ubicaciones_anteriores, historial_anterior)
+    if not df_operativo.empty:
+        excel_bytes = generar_excel_control(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_anteriores, historial_anterior)
         st.download_button(
             "Descargar control actualizado Excel",
             data=excel_bytes,
@@ -2600,7 +2602,7 @@ with tab_pallets:
         if not df_reimpresion.empty:
             fuentes_impresion.append("Control anterior cargado")
         fuente_impresion = st.radio("Origen para imprimir", fuentes_impresion, horizontal=True)
-        df_para_imprimir = df_reimpresion if fuente_impresion == "Control anterior cargado" else df_pick
+        df_para_imprimir = df_reimpresion if fuente_impresion == "Control anterior cargado" else df_operativo
         pallets_disponibles = sorted(pd.to_numeric(df_para_imprimir["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
         c_pdf1, c_pdf2, c_pdf3 = st.columns([1, 1, 1.4])
         pallet_pdf = c_pdf1.selectbox("Pallet para imprimir", pallets_disponibles)
@@ -2664,7 +2666,10 @@ with tab_pallets:
     st.markdown("---")
     st.subheader("Completar ubicación al llegar al Polo")
     if df_pick.empty:
-        st.caption("No hay líneas pendientes para ubicar.")
+        if usando_control_anterior:
+            st.caption("El control anterior se muestra para consulta. Para completar ubicaciones, cargalo como mudanza activa.")
+        else:
+            st.caption("No hay líneas pendientes para ubicar.")
     else:
         opciones_ubicacion = [
             f"{r.item_id}) Pallet {r.pallet} | Caja {r.bulto} | {r.ubicacion} | {r.articulo} | Piezas {r.cantidad_mudada}"
@@ -2757,11 +2762,13 @@ with tab_pallets:
 
 with tab_recepcion:
     st.subheader("Recepción en Polo")
-    if df_pick.empty:
+    if df_operativo.empty:
         st.info("Todavía no hay artículos en la mudanza para recibir.")
     else:
+        if usando_control_anterior:
+            st.info("Mostrando recepción del control anterior cargado. Para guardar cambios, usalo como mudanza activa.")
         st.caption("Seleccioná el pallet, informá una ubicación única y desmarcá solamente lo que tenga problema. Si hay algo desmarcado, ese pallet no se guarda.")
-        trabajo_recepcion = normalizar_df_pick(df_pick)
+        trabajo_recepcion = normalizar_df_pick(df_operativo)
         pallets_recepcion = sorted(pd.to_numeric(trabajo_recepcion["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
         pr1, pr2, pr3 = st.columns([1, 1.5, 1.5])
         pallet_recepcion = pr1.selectbox("Pallet a recibir", pallets_recepcion)
@@ -2829,7 +2836,7 @@ with tab_recepcion:
             key="recepcion_polo_editor",
         )
 
-        if st.button("Guardar recepción del pallet", type="primary"):
+        if st.button("Guardar recepción del pallet", type="primary", disabled=usando_control_anterior):
             if not str(ubicacion_pallet).strip():
                 st.error("Informá la ubicación del pallet antes de guardar.")
                 st.stop()
@@ -2856,7 +2863,7 @@ with tab_recepcion:
             st.success(f"Pallet {pallet_recepcion} recibido OK y ubicación actualizada.")
             st.rerun()
 
-        recepcion_actual = preparar_recepcion_polo(df_pick)
+        recepcion_actual = preparar_recepcion_polo(df_operativo)
         if not recepcion_actual.empty:
             pendientes = int((~recepcion_actual["OK recepción"].astype(bool)).sum())
             diferencias = int((pd.to_numeric(recepcion_actual["Diferencia"], errors="coerce").fillna(0) != 0).sum())
@@ -2867,20 +2874,20 @@ with tab_recepcion:
 
 with tab_bases:
     st.subheader("STOCK_DARKINEL_ACTUALIZADO")
-    darkinel_actual = stock_darkinel_actualizado(stock_consolidado, df_pick)
+    darkinel_actual = stock_darkinel_actualizado(stock_consolidado, df_operativo)
     st.dataframe(darkinel_actual, use_container_width=True, hide_index=True)
 
     st.subheader("STOCK_POLO_LOGISTICO")
-    polo_actual = stock_polo_actualizado(df_pick, stock_polo_anterior, ubicaciones_anteriores)
+    polo_actual = stock_polo_actualizado(df_operativo, stock_polo_anterior, ubicaciones_anteriores)
     st.dataframe(polo_actual, use_container_width=True, hide_index=True)
 
     st.subheader("UBICACION_POLO_LOGISTICO")
-    ubicacion_actual = ubicacion_polo_logistico(df_pick, ubicaciones_anteriores)
+    ubicacion_actual = ubicacion_polo_logistico(df_operativo, ubicaciones_anteriores)
     st.dataframe(ubicacion_actual, use_container_width=True, hide_index=True)
 
 with tab_stock:
     st.subheader("Consulta de stock por código")
-    inventario_consulta = inventario_para_buscar(stock_consolidado, df_pick, ubicaciones_anteriores, frecuencias_df)
+    inventario_consulta = inventario_para_buscar(stock_consolidado, df_operativo, ubicaciones_anteriores, frecuencias_df)
     codigo_consulta = st.text_input("Código / lectura scanner", placeholder="Ej: KCYB-50-22X")
 
     if codigo_consulta:
