@@ -604,9 +604,128 @@ def clasificar_frecuencia_meses(meses) -> str:
     return "Scrap"
 
 
+def meses_entre(inicio: datetime, fin: datetime) -> int:
+    return max((fin.year - inicio.year) * 12 + (fin.month - inicio.month), 0)
+
+
+def fecha_mes_desde_indice(primer_mes: datetime, indice: int) -> datetime:
+    total = primer_mes.year * 12 + primer_mes.month - 1 + indice
+    return datetime(total // 12, total % 12 + 1, 1)
+
+
+def fecha_mes_hoja(nombre_hoja: str) -> datetime | None:
+    meses = {
+        "ENERO": 1,
+        "FEBRERO": 2,
+        "FEBREO": 2,
+        "MARZO": 3,
+        "ABRIL": 4,
+        "MAYO": 5,
+        "MAyo".upper(): 5,
+        "JUNIO": 6,
+        "JULIO": 7,
+        "AGOSTO": 8,
+        "SETIEMBRE": 9,
+        "SEPTIEMBRE": 9,
+        "OCTUBRE": 10,
+        "NOVIEMBRE": 11,
+        "DICIEMBRE": 12,
+        "DIECIEMBRE": 12,
+    }
+    texto = str(nombre_hoja).strip().upper()
+    year_match = re.search(r"(20\d{2})", texto)
+    if not year_match:
+        return None
+    anio = int(year_match.group(1))
+    mes = 0
+    for nombre_mes, numero_mes in meses.items():
+        if nombre_mes in texto:
+            mes = numero_mes
+            break
+    if not mes:
+        return None
+    return datetime(anio, mes, 1)
+
+
+def leer_frecuencia_desde_ventas_mensuales(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    nombre = filename.lower()
+    if not nombre.endswith((".xls", ".xlsx", ".xlsm")):
+        return pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+
+    buffer = io.BytesIO(file_bytes)
+    engine = "xlrd" if nombre.endswith(".xls") else "openpyxl"
+    try:
+        xls = pd.ExcelFile(buffer, engine=engine)
+    except Exception:
+        return pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+    if len(xls.sheet_names) < 3:
+        return pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+
+    primera_fecha = fecha_mes_hoja(xls.sheet_names[0])
+    ventas = []
+    for idx, sheet_name in enumerate(xls.sheet_names):
+        fecha_mes = fecha_mes_hoja(sheet_name)
+        if primera_fecha is not None:
+            fecha_secuencial = fecha_mes_desde_indice(primera_fecha, idx)
+            if fecha_mes is None or fecha_mes < fecha_secuencial.replace(year=fecha_secuencial.year - 1):
+                fecha_mes = fecha_secuencial
+        if fecha_mes is None:
+            continue
+
+        df = pd.read_excel(xls, sheet_name=sheet_name, header=None, dtype=object)
+        if df.shape[0] < 3 or df.shape[1] < 4:
+            continue
+        col_ventas = 3
+        for fila_hdr in list(range(1, min(5, len(df)))) + [0]:
+            for col_hdr, valor_hdr in df.iloc[fila_hdr].items():
+                if normalizar_codigo(valor_hdr) == "VENTAS":
+                    col_ventas = int(col_hdr)
+                    break
+            else:
+                continue
+            break
+        for row_idx in range(2, len(df)):
+            row = df.iloc[row_idx]
+            codigo = normalizar_codigo(row.iloc[0] if len(row) > 0 else "")
+            if not codigo or codigo in ["PRODUCTO", "TOTAL"]:
+                continue
+            descripcion = "" if len(row) < 2 or pd.isna(row.iloc[1]) else str(row.iloc[1]).strip()
+            cantidad = pd.to_numeric(row.iloc[col_ventas] if len(row) > col_ventas else 0, errors="coerce")
+            if pd.isna(cantidad) or float(cantidad) <= 0:
+                continue
+            ventas.append(
+                {
+                    "codigo_normalizado": codigo,
+                    "descripcion_venta": descripcion,
+                    "fecha_venta": fecha_mes,
+                    "unidades_vendidas": float(cantidad),
+                }
+            )
+
+    if not ventas:
+        return pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+
+    tabla = pd.DataFrame(ventas)
+    fecha_referencia = tabla["fecha_venta"].max()
+    resumen = (
+        tabla.groupby("codigo_normalizado", as_index=False)
+        .agg(
+            ultima_venta=("fecha_venta", "max"),
+            unidades_vendidas=("unidades_vendidas", "sum"),
+            descripcion_venta=("descripcion_venta", _primer_valor_no_vacio),
+        )
+    )
+    resumen["meses_venta"] = resumen["ultima_venta"].map(lambda fecha: meses_entre(fecha, fecha_referencia))
+    resumen["frecuencia"] = resumen["meses_venta"].map(clasificar_frecuencia_meses)
+    return resumen[["codigo_normalizado", "frecuencia", "meses_venta"]]
+
+
 def leer_frecuencias(file_bytes: bytes, filename: str) -> pd.DataFrame:
     if not file_bytes:
         return pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+    ventas_mensuales = leer_frecuencia_desde_ventas_mensuales(file_bytes, filename)
+    if not ventas_mensuales.empty:
+        return ventas_mensuales
     raw = leer_archivo_excel_o_csv(file_bytes, filename)
     if raw.empty:
         return pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
