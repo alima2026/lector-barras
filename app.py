@@ -586,6 +586,62 @@ def cargar_stock(file_bytes: bytes, filename: str) -> pd.DataFrame:
     return limpiar_stock_desde_reporte(raw)
 
 
+def clasificar_frecuencia_meses(meses) -> str:
+    meses_num = pd.to_numeric(meses, errors="coerce")
+    if pd.isna(meses_num):
+        return "Sin dato"
+    meses_num = float(meses_num)
+    if meses_num <= 6:
+        return "A"
+    if meses_num <= 12:
+        return "B"
+    if meses_num <= 18:
+        return "C"
+    if meses_num <= 24:
+        return "E"
+    if meses_num <= 38:
+        return "F"
+    return "Scrap"
+
+
+def leer_frecuencias(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    if not file_bytes:
+        return pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+    raw = leer_archivo_excel_o_csv(file_bytes, filename)
+    if raw.empty:
+        return pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+
+    header_row = 0
+    for i in range(min(len(raw), 30)):
+        fila_norm = [normalizar_codigo(v) for v in raw.iloc[i].tolist()]
+        tiene_codigo = any(v in ["ARTICULO", "CODIGO", "CODIGONORMALIZADO", "SKU"] for v in fila_norm)
+        tiene_frecuencia = any(v in ["FRECUENCIA", "CATEGORIA", "ABC", "MESES", "MESESVENTA", "MESESSINVENTA"] for v in fila_norm)
+        if tiene_codigo and tiene_frecuencia:
+            header_row = i
+            break
+
+    tabla = raw.iloc[header_row + 1 :].copy()
+    tabla.columns = [str(c).strip() if pd.notna(c) else "" for c in raw.iloc[header_row].tolist()]
+    tabla = tabla.dropna(how="all")
+
+    col_codigo = extraer_columna(tabla, ["Artículo", "Articulo", "Codigo", "Código", "Código normalizado", "Codigo normalizado", "SKU"])
+    col_categoria = extraer_columna(tabla, ["Frecuencia", "Categoria", "Categoría", "ABC"])
+    col_meses = extraer_columna(tabla, ["Meses", "Meses venta", "Meses sin venta", "Antiguedad", "Antigüedad"])
+    if not col_codigo:
+        return pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+
+    salida = pd.DataFrame()
+    salida["codigo_normalizado"] = tabla[col_codigo].map(normalizar_codigo)
+    salida["meses_venta"] = pd.to_numeric(tabla[col_meses], errors="coerce") if col_meses else pd.NA
+    if col_categoria:
+        salida["frecuencia"] = tabla[col_categoria].fillna("").astype(str).str.strip().str.upper()
+        salida["frecuencia"] = salida["frecuencia"].where(salida["frecuencia"] != "", salida["meses_venta"].map(clasificar_frecuencia_meses))
+    else:
+        salida["frecuencia"] = salida["meses_venta"].map(clasificar_frecuencia_meses)
+    salida = salida[salida["codigo_normalizado"] != ""].copy()
+    return salida[["codigo_normalizado", "frecuencia", "meses_venta"]]
+
+
 # -----------------------------
 # Consolidación y búsqueda
 # -----------------------------
@@ -711,6 +767,100 @@ def preparar_resultado_para_mostrar(df: pd.DataFrame) -> pd.DataFrame:
             "puntaje": "Coincidencia",
         }
     )
+
+
+def inventario_para_buscar(
+    stock_consolidado: pd.DataFrame,
+    df_pick: pd.DataFrame,
+    ubicaciones_anteriores: pd.DataFrame,
+    frecuencias: pd.DataFrame,
+) -> pd.DataFrame:
+    columnas = ["codigo_normalizado", "articulo", "descripcion", "deposito", "ubicacion", "cantidad", "frecuencia"]
+    partes = []
+
+    darkinel = stock_darkinel_actualizado(stock_consolidado, df_pick)
+    if not darkinel.empty:
+        dark = pd.DataFrame(
+            {
+                "codigo_normalizado": darkinel["Código normalizado"].astype(str).str.strip(),
+                "articulo": darkinel["Artículo"].astype(str).str.strip(),
+                "descripcion": darkinel["Descripción"].astype(str).str.strip(),
+                "deposito": "DARKINEL",
+                "ubicacion": "DARKINEL",
+                "cantidad": pd.to_numeric(darkinel["Stock restante Darkinel"], errors="coerce").fillna(0),
+            }
+        )
+        partes.append(dark[dark["cantidad"] > 0].copy())
+
+    ubicaciones = ubicacion_polo_logistico(df_pick, ubicaciones_anteriores)
+    if not ubicaciones.empty:
+        ubic_col = extraer_columna(ubicaciones, ["Ubicación", "Ubicacion"])
+        polo = pd.DataFrame(
+            {
+                "codigo_normalizado": ubicaciones["Código normalizado"].astype(str).str.strip(),
+                "articulo": ubicaciones["Artículo"].astype(str).str.strip(),
+                "descripcion": ubicaciones["Descripción"].astype(str).str.strip(),
+                "deposito": "POLO LOGISTICO",
+                "ubicacion": ubicaciones[ubic_col].astype(str).str.strip().str.upper() if ubic_col else "",
+                "cantidad": pd.to_numeric(ubicaciones["Piezas"], errors="coerce").fillna(0),
+            }
+        )
+        polo = polo[polo["ubicacion"].apply(es_ubicacion_real)].copy()
+        if not polo.empty:
+            partes.append(
+                polo.groupby(["codigo_normalizado", "articulo", "descripcion", "deposito", "ubicacion"], as_index=False)
+                .agg(cantidad=("cantidad", "sum"))
+            )
+
+    if not partes:
+        return pd.DataFrame(columns=columnas)
+
+    inventario = pd.concat(partes, ignore_index=True)
+    if frecuencias is not None and not frecuencias.empty:
+        frec = frecuencias[["codigo_normalizado", "frecuencia"]].drop_duplicates("codigo_normalizado")
+        inventario = inventario.merge(frec, on="codigo_normalizado", how="left")
+    else:
+        inventario["frecuencia"] = ""
+    inventario["frecuencia"] = inventario["frecuencia"].fillna("").replace("", "Sin dato")
+    inventario["cantidad"] = inventario["cantidad"].apply(formatear_numero)
+    return inventario[columnas]
+
+
+def buscar_en_inventario(inventario: pd.DataFrame, texto: str) -> pd.DataFrame:
+    if inventario.empty or not str(texto).strip():
+        return pd.DataFrame(columns=inventario.columns)
+    info = extraer_candidatos_mazda(texto)
+    candidatos = info["candidatos"]
+    if not candidatos:
+        return pd.DataFrame(columns=inventario.columns)
+
+    exactos = inventario[inventario["codigo_normalizado"].isin(candidatos)].copy()
+    if not exactos.empty:
+        exactos["orden"] = exactos["codigo_normalizado"].map(lambda c: candidatos.index(c) if c in candidatos else 999)
+        return exactos.sort_values(["orden", "deposito", "ubicacion"]).drop(columns=["orden"], errors="ignore")
+
+    candidatos_validos = [c for c in candidatos if len(c) >= 5]
+    mascara = inventario["codigo_normalizado"].map(
+        lambda codigo: any(codigo.startswith(c) or c.startswith(codigo) or c in codigo or codigo in c for c in candidatos_validos)
+    )
+    return inventario[mascara].sort_values(["codigo_normalizado", "deposito", "ubicacion"]).head(30)
+
+
+def mostrar_inventario(df: pd.DataFrame) -> pd.DataFrame:
+    columnas = ["Código normalizado", "Artículo", "Descripción", "Depósito", "Locación", "Cantidad", "Frecuencia"]
+    if df.empty:
+        return pd.DataFrame(columns=columnas)
+    return df.rename(
+        columns={
+            "codigo_normalizado": "Código normalizado",
+            "articulo": "Artículo",
+            "descripcion": "Descripción",
+            "deposito": "Depósito",
+            "ubicacion": "Locación",
+            "cantidad": "Cantidad",
+            "frecuencia": "Frecuencia",
+        }
+    )[columnas]
 
 
 # -----------------------------
@@ -1980,6 +2130,14 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
+    st.subheader("Frecuencia opcional")
+    uploaded_frecuencia = st.file_uploader(
+        "Subí archivo de frecuencia / meses de venta",
+        type=["xls", "xlsx", "xlsm", "csv"],
+        help="Debe tener una columna de Artículo/Código y una columna Frecuencia/Categoría o Meses.",
+    )
+
+    st.markdown("---")
     st.subheader("Base Polo anterior opcional")
     uploaded_polo = st.file_uploader(
         "Subí el último control generado para seguir actualizando el POLO",
@@ -2065,6 +2223,19 @@ if stock_df.empty:
     st.stop()
 
 stock_consolidado = consolidar_por_codigo(stock_df)
+if uploaded_frecuencia is not None:
+    try:
+        frecuencias_df = leer_frecuencias(uploaded_frecuencia.getvalue(), uploaded_frecuencia.name)
+        if frecuencias_df.empty:
+            st.sidebar.warning("No pude leer códigos/frecuencia del archivo de frecuencia.")
+        else:
+            st.sidebar.success(f"Frecuencias cargadas: {len(frecuencias_df)} códigos")
+    except Exception as e:
+        frecuencias_df = pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+        st.sidebar.error("No pude leer el archivo de frecuencia.")
+        st.sidebar.exception(e)
+else:
+    frecuencias_df = pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
 
 polo_guardado = cargar_archivo_estado("control_polo_actual")
 if uploaded_polo is not None:
@@ -2108,7 +2279,7 @@ col4.metric("Piezas a mudar", f"{int(pd.to_numeric(df_pick.get('cantidad_mudada'
 st.markdown("---")
 
 tab_buscar, tab_pallets, tab_recepcion, tab_bases, tab_stock = st.tabs(
-    ["1) Buscar y pickear", "2) Pallets / mudanza", "3) Recepción Polo", "4) Bases actualizadas", "5) Stock limpio"]
+    ["1) Buscar y pickear", "2) Pallets / mudanza", "3) Recepción Polo", "4) Bases actualizadas", "5) Consulta stock"]
 )
 
 with tab_buscar:
@@ -2708,9 +2879,17 @@ with tab_bases:
     st.dataframe(ubicacion_actual, use_container_width=True, hide_index=True)
 
 with tab_stock:
-    st.subheader("Stock limpio y consolidado")
-    st.caption("Esta tabla ya suma los códigos repetidos de la base original.")
-    st.dataframe(preparar_resultado_para_mostrar(stock_consolidado), use_container_width=True, hide_index=True)
+    st.subheader("Consulta de stock por código")
+    inventario_consulta = inventario_para_buscar(stock_consolidado, df_pick, ubicaciones_anteriores, frecuencias_df)
+    codigo_consulta = st.text_input("Código / lectura scanner", placeholder="Ej: KCYB-50-22X")
 
-    csv_stock = preparar_resultado_para_mostrar(stock_consolidado).to_csv(index=False).encode("utf-8-sig")
-    st.download_button("Descargar stock limpio CSV", data=csv_stock, file_name="stock_limpio_consolidado.csv", mime="text/csv")
+    if codigo_consulta:
+        resultado_consulta = buscar_en_inventario(inventario_consulta, codigo_consulta)
+        if resultado_consulta.empty:
+            st.warning("No encontré ese código en Darkinel ni en Polo.")
+        else:
+            st.dataframe(mostrar_inventario(resultado_consulta), use_container_width=True, hide_index=True)
+    else:
+        st.dataframe(mostrar_inventario(inventario_consulta.head(100)), use_container_width=True, hide_index=True)
+
+    st.caption("Frecuencia: A = 0 a 6 meses, B = 6,1 a 12, C = 12,1 a 18, E = 18,1 a 24, F = 24,1 a 38, Scrap = más de 38 meses.")
