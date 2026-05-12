@@ -1244,28 +1244,81 @@ def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
     return normalizar_df_pick(salida)
 
 
-def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFrame) -> pd.DataFrame:
+def es_ubicacion_real(valor) -> bool:
+    ubicacion = str(valor or "").strip().upper()
+    return bool(ubicacion and ubicacion not in ["PENDIENTE", "NAN", "NONE"])
+
+
+def stock_polo_desde_ubicaciones(ubicaciones: pd.DataFrame) -> pd.DataFrame:
     columnas = ["Artículo", "Descripción", "Stock total Polo", "Código normalizado"]
+    if ubicaciones is None or ubicaciones.empty:
+        return pd.DataFrame(columns=columnas)
+
+    art_col = extraer_columna(ubicaciones, ["Artículo", "Articulo"])
+    desc_col = extraer_columna(ubicaciones, ["Descripción", "Descripcion"])
+    piezas_col = extraer_columna(ubicaciones, ["Piezas", "Piezas enviadas", "Piezas en esta caja", "Cantidad mudada"])
+    norm_col = extraer_columna(ubicaciones, ["Código normalizado", "Codigo normalizado"])
+    ubic_col = extraer_columna(ubicaciones, ["Ubicación", "Ubicacion", "Ubicación Polo", "Ubicacion Polo"])
+
+    if not art_col or not piezas_col:
+        return pd.DataFrame(columns=columnas)
+
+    trabajo = pd.DataFrame(
+        {
+            "Artículo": ubicaciones[art_col].astype(str).str.strip(),
+            "Descripción": ubicaciones[desc_col].astype(str).str.strip() if desc_col else "",
+            "Stock total Polo": pd.to_numeric(ubicaciones[piezas_col], errors="coerce").fillna(0),
+            "Código normalizado": ubicaciones[norm_col].astype(str).str.strip() if norm_col else ubicaciones[art_col].map(normalizar_codigo),
+            "Ubicación": ubicaciones[ubic_col].astype(str).str.strip().str.upper() if ubic_col else "",
+        }
+    )
+    trabajo = trabajo[trabajo["Ubicación"].apply(es_ubicacion_real)].copy()
+    if trabajo.empty:
+        return pd.DataFrame(columns=columnas)
+
+    res = (
+        trabajo.groupby("Código normalizado", as_index=False)
+        .agg(
+            **{
+                "Artículo": ("Artículo", _primer_valor_no_vacio),
+                "Descripción": ("Descripción", _primer_valor_no_vacio),
+                "Stock total Polo": ("Stock total Polo", "sum"),
+            }
+        )
+    )
+    res["Stock total Polo"] = res["Stock total Polo"].apply(formatear_numero)
+    return res[["Artículo", "Descripción", "Stock total Polo", "Código normalizado"]]
+
+
+def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFrame, ubicaciones_anteriores: pd.DataFrame | None = None) -> pd.DataFrame:
+    columnas = ["Artículo", "Descripción", "Stock total Polo", "Código normalizado"]
+    ubicaciones_consolidadas = ubicacion_polo_logistico(df_pick, ubicaciones_anteriores)
+    desde_ubicaciones = stock_polo_desde_ubicaciones(ubicaciones_consolidadas)
+    if not desde_ubicaciones.empty or not ubicaciones_consolidadas.empty:
+        return desde_ubicaciones
+
     nuevos = pd.DataFrame(columns=columnas)
 
     if not df_pick.empty:
         trabajo = normalizar_df_pick(df_pick)
-        nuevos = (
-            trabajo.groupby("codigo_normalizado", as_index=False)
-            .agg(
-                articulo=("articulo", _primer_valor_no_vacio),
-                descripcion=("descripcion", _primer_valor_no_vacio),
-                stock_total_polo=("cantidad_mudada", "sum"),
+        trabajo = trabajo[trabajo["ubicacion"].apply(es_ubicacion_real)].copy()
+        if not trabajo.empty:
+            nuevos = (
+                trabajo.groupby("codigo_normalizado", as_index=False)
+                .agg(
+                    articulo=("articulo", _primer_valor_no_vacio),
+                    descripcion=("descripcion", _primer_valor_no_vacio),
+                    stock_total_polo=("cantidad_mudada", "sum"),
+                )
+                .rename(
+                    columns={
+                        "articulo": "Artículo",
+                        "descripcion": "Descripción",
+                        "stock_total_polo": "Stock total Polo",
+                        "codigo_normalizado": "Código normalizado",
+                    }
+                )
             )
-            .rename(
-                columns={
-                    "articulo": "Artículo",
-                    "descripcion": "Descripción",
-                    "stock_total_polo": "Stock total Polo",
-                    "codigo_normalizado": "Código normalizado",
-                }
-            )
-        )
 
     anterior = pd.DataFrame(columns=columnas)
     if stock_polo_anterior is not None and not stock_polo_anterior.empty:
@@ -1410,9 +1463,48 @@ def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.D
 
 def historial_mudanzas(df_pick: pd.DataFrame, historial_anterior: pd.DataFrame) -> pd.DataFrame:
     actual = preparar_detalle_mudanza(df_pick)
+    partes_historial = []
     if historial_anterior is not None and not historial_anterior.empty:
-        return pd.concat([historial_anterior, actual], ignore_index=True)
-    return actual
+        anterior = historial_anterior.copy()
+        anterior["_fuente_actual"] = 0
+        partes_historial.append(anterior)
+    if actual is not None and not actual.empty:
+        actual = actual.copy()
+        actual["_fuente_actual"] = 1
+        partes_historial.append(actual)
+
+    if not partes_historial:
+        return actual
+
+    combinado = pd.concat(partes_historial, ignore_index=True)
+    ubic_col = extraer_columna(combinado, ["Ubicación", "Ubicacion"])
+    if not ubic_col:
+        return combinado.drop(columns=["_fuente_actual"], errors="ignore")
+
+    combinado["_ubicacion_real"] = combinado[ubic_col].apply(es_ubicacion_real).astype(int)
+    combinado["_fuente_actual"] = pd.to_numeric(combinado["_fuente_actual"], errors="coerce").fillna(0).astype(int)
+    combinado["_orden_original"] = range(len(combinado))
+
+    excluir_clave = {
+        "_fuente_actual",
+        "_ubicacion_real",
+        "_orden_original",
+        ubic_col,
+        extraer_columna(combinado, ["Código normalizado", "Codigo normalizado"]),
+        extraer_columna(combinado, ["Stock restante Darkinel"]),
+    }
+    claves_linea = [c for c in combinado.columns if c not in excluir_clave and not str(c).startswith("_")]
+    combinado["_ocurrencia"] = combinado.groupby(claves_linea + ["_fuente_actual"], dropna=False).cumcount()
+    claves_unicas = claves_linea + ["_ocurrencia"]
+    orden_cols = [c for c in ["Pallet", "Caja", "Fecha/Hora", "Artículo", "_orden_original"] if c in combinado.columns]
+
+    return (
+        combinado.sort_values(["_fuente_actual", "_ubicacion_real", "_orden_original"], ascending=[False, False, False])
+        .drop_duplicates(claves_unicas, keep="first")
+        .sort_values(orden_cols)
+        .drop(columns=["_fuente_actual", "_ubicacion_real", "_orden_original", "_ocurrencia"], errors="ignore")
+        .reset_index(drop=True)
+    )
 
 
 def preparar_recepcion_polo(df_pick: pd.DataFrame) -> pd.DataFrame:
@@ -1484,7 +1576,7 @@ def generar_excel_control(
     historial_anterior: pd.DataFrame,
 ) -> bytes:
     darkinel = stock_darkinel_actualizado(stock_consolidado, df_pick)
-    polo = stock_polo_actualizado(df_pick, stock_polo_anterior)
+    polo = stock_polo_actualizado(df_pick, stock_polo_anterior, ubicaciones_anteriores)
     ubicacion = ubicacion_polo_logistico(df_pick, ubicaciones_anteriores)
     historial = historial_mudanzas(df_pick, historial_anterior)
     resumen = resumen_pallets(df_pick)
@@ -2608,7 +2700,7 @@ with tab_bases:
     st.dataframe(darkinel_actual, use_container_width=True, hide_index=True)
 
     st.subheader("STOCK_POLO_LOGISTICO")
-    polo_actual = stock_polo_actualizado(df_pick, stock_polo_anterior)
+    polo_actual = stock_polo_actualizado(df_pick, stock_polo_anterior, ubicaciones_anteriores)
     st.dataframe(polo_actual, use_container_width=True, hide_index=True)
 
     st.subheader("UBICACION_POLO_LOGISTICO")
