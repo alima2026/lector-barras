@@ -4,6 +4,7 @@ import re
 import sqlite3
 import base64
 import hashlib
+from difflib import SequenceMatcher
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -974,16 +975,28 @@ def buscar_en_inventario(inventario: pd.DataFrame, texto: str) -> pd.DataFrame:
     if not candidatos:
         return pd.DataFrame(columns=inventario.columns)
 
-    exactos = inventario[inventario["codigo_normalizado"].isin(candidatos)].copy()
-    if not exactos.empty:
-        exactos["orden"] = exactos["codigo_normalizado"].map(lambda c: candidatos.index(c) if c in candidatos else 999)
-        return exactos.sort_values(["orden", "deposito", "ubicacion"]).drop(columns=["orden"], errors="ignore")
-
     candidatos_validos = [c for c in candidatos if len(c) >= 5]
-    mascara = inventario["codigo_normalizado"].map(
-        lambda codigo: any(codigo.startswith(c) or c.startswith(codigo) or c in codigo or codigo in c for c in candidatos_validos)
-    )
-    return inventario[mascara].sort_values(["codigo_normalizado", "deposito", "ubicacion"]).head(30)
+    if not candidatos_validos:
+        return pd.DataFrame(columns=inventario.columns)
+
+    def coincidencia(codigo) -> int:
+        codigo_norm = normalizar_codigo(codigo)
+        mejor = 0
+        for candidato in candidatos_validos:
+            if codigo_norm == candidato:
+                mejor = max(mejor, 100)
+            elif codigo_norm.startswith(candidato) or candidato.startswith(codigo_norm):
+                mejor = max(mejor, 95)
+            else:
+                mejor = max(mejor, int(round(SequenceMatcher(None, codigo_norm, candidato).ratio() * 100)))
+        return mejor
+
+    resultado = inventario.copy()
+    resultado["coincidencia"] = resultado["codigo_normalizado"].map(coincidencia)
+    resultado = resultado[resultado["coincidencia"] >= 90].copy()
+    if resultado.empty:
+        return pd.DataFrame(columns=list(inventario.columns) + ["coincidencia"])
+    return resultado.sort_values(["coincidencia", "codigo_normalizado", "deposito", "ubicacion"], ascending=[False, True, True, True]).head(50)
 
 
 def mostrar_inventario(df: pd.DataFrame) -> pd.DataFrame:
