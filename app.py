@@ -590,7 +590,7 @@ def cargar_stock(file_bytes: bytes, filename: str) -> pd.DataFrame:
 def clasificar_frecuencia_meses(meses) -> str:
     meses_num = pd.to_numeric(meses, errors="coerce")
     if pd.isna(meses_num):
-        return "Sin dato"
+        return "Sin ventas registradas"
     meses_num = float(meses_num)
     if meses_num <= 6:
         return "A"
@@ -962,7 +962,7 @@ def inventario_para_buscar(
         inventario = inventario.merge(frec, on="codigo_normalizado", how="left")
     else:
         inventario["frecuencia"] = ""
-    inventario["frecuencia"] = inventario["frecuencia"].fillna("").replace("", "Sin dato")
+    inventario["frecuencia"] = inventario["frecuencia"].fillna("").replace("", "Sin ventas registradas")
     inventario["cantidad"] = inventario["cantidad"].apply(formatear_numero)
     return inventario[columnas]
 
