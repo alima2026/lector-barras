@@ -2387,6 +2387,23 @@ with st.sidebar:
         help="Debe tener una columna de Artículo/Código y una columna Frecuencia/Categoría o Meses.",
     )
 
+    frecuencia_guardada_sidebar = cargar_archivo_estado("frecuencia_ventas_actual")
+    usar_frecuencia_guardada = False
+    if frecuencia_guardada_sidebar:
+        usar_frecuencia_guardada = st.checkbox(
+            f"Usar ventas guardadas ({frecuencia_guardada_sidebar.get('nombre', 'archivo')})",
+            value=uploaded_frecuencia is None,
+        )
+        st.caption(f"Ventas guardadas: {fecha_estado_db('frecuencia_ventas_actual')}")
+        if uploaded_frecuencia is not None and st.button("Guardar estas ventas ahora"):
+            guardar_archivo_estado("frecuencia_ventas_actual", uploaded_frecuencia.name, uploaded_frecuencia.getvalue())
+            st.success("Ventas guardadas.")
+            st.rerun()
+    elif uploaded_frecuencia is not None and st.button("Guardar estas ventas ahora"):
+        guardar_archivo_estado("frecuencia_ventas_actual", uploaded_frecuencia.name, uploaded_frecuencia.getvalue())
+        st.success("Ventas guardadas.")
+        st.rerun()
+
     st.markdown("---")
     st.subheader("Base Polo anterior opcional")
     uploaded_polo = st.file_uploader(
@@ -2473,9 +2490,13 @@ if stock_df.empty:
     st.stop()
 
 stock_consolidado = consolidar_por_codigo(stock_df)
+frecuencia_guardada = cargar_archivo_estado("frecuencia_ventas_actual")
 if uploaded_frecuencia is not None:
     try:
-        frecuencias_df = leer_frecuencias(uploaded_frecuencia.getvalue(), uploaded_frecuencia.name)
+        frecuencia_bytes = uploaded_frecuencia.getvalue()
+        frecuencia_filename = uploaded_frecuencia.name
+        guardar_archivo_si_cambio("frecuencia_ventas_actual", frecuencia_filename, frecuencia_bytes)
+        frecuencias_df = leer_frecuencias(frecuencia_bytes, frecuencia_filename)
         if frecuencias_df.empty:
             st.sidebar.warning("No pude leer códigos/frecuencia del archivo de frecuencia.")
         else:
@@ -2483,6 +2504,19 @@ if uploaded_frecuencia is not None:
     except Exception as e:
         frecuencias_df = pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
         st.sidebar.error("No pude leer el archivo de frecuencia.")
+        st.sidebar.exception(e)
+elif frecuencia_guardada and usar_frecuencia_guardada:
+    try:
+        frecuencia_bytes = frecuencia_guardada["contenido"]
+        frecuencia_filename = frecuencia_guardada.get("nombre", "ventas_guardadas.xlsx")
+        frecuencias_df = leer_frecuencias(frecuencia_bytes, frecuencia_filename)
+        if frecuencias_df.empty:
+            st.sidebar.warning("No pude leer codigos/frecuencia de las ventas guardadas.")
+        else:
+            st.sidebar.info(f"Usando ventas guardadas: {frecuencia_filename}")
+    except Exception as e:
+        frecuencias_df = pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+        st.sidebar.error("No pude leer las ventas guardadas.")
         st.sidebar.exception(e)
 else:
     frecuencias_df = pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
