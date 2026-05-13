@@ -911,6 +911,27 @@ def inventario_para_buscar(
         )
         partes.append(dark[dark["cantidad"] > 0].copy())
 
+    trabajo_polo = normalizar_df_pick(df_pick) if df_pick is not None and not df_pick.empty else pd.DataFrame()
+    if not trabajo_polo.empty:
+        polo = pd.DataFrame(
+            {
+                "codigo_normalizado": trabajo_polo["codigo_normalizado"].astype(str).str.strip(),
+                "articulo": trabajo_polo["articulo"].astype(str).str.strip(),
+                "descripcion": trabajo_polo["descripcion"].astype(str).str.strip(),
+                "deposito": "POLO LOGISTICO",
+                "ubicacion": trabajo_polo["ubicacion"].astype(str).str.strip().str.upper(),
+                "cantidad": pd.to_numeric(trabajo_polo["cantidad_mudada"], errors="coerce").fillna(0),
+            }
+        )
+        polo = polo[(polo["codigo_normalizado"] != "") & (polo["cantidad"] > 0)].copy()
+        if not polo.empty:
+            partes.append(
+                polo.groupby(["codigo_normalizado", "articulo", "descripcion", "deposito", "ubicacion"], as_index=False)
+                .agg(cantidad=("cantidad", "sum"))
+            )
+        df_pick = pd.DataFrame()
+        ubicaciones_anteriores = pd.DataFrame()
+
     ubicaciones = ubicacion_polo_logistico(df_pick, ubicaciones_anteriores)
     if not ubicaciones.empty:
         ubic_col = extraer_columna(ubicaciones, ["Ubicación", "Ubicacion"])
@@ -980,6 +1001,30 @@ def mostrar_inventario(df: pd.DataFrame) -> pd.DataFrame:
             "frecuencia": "Frecuencia",
         }
     )[columnas]
+
+
+def firma_lineas_mudanza(df: pd.DataFrame) -> set:
+    if df is None or df.empty:
+        return set()
+    trabajo = normalizar_df_pick(df)
+    claves = []
+    for row in trabajo.itertuples():
+        claves.append(
+            (
+                str(getattr(row, "codigo_normalizado", "")).strip(),
+                entero_seguro(getattr(row, "pallet", 0), 0),
+                entero_seguro(getattr(row, "bulto", 0), 0),
+                numero_seguro(getattr(row, "cantidad_mudada", 0), 0),
+                str(getattr(row, "ubicacion", "")).strip().upper(),
+            )
+        )
+    return set(claves)
+
+
+def misma_mudanza(df_a: pd.DataFrame, df_b: pd.DataFrame) -> bool:
+    firma_a = firma_lineas_mudanza(df_a)
+    firma_b = firma_lineas_mudanza(df_b)
+    return bool(firma_a and firma_a == firma_b)
 
 
 def formulario_agregar_desde_base(
@@ -1449,24 +1494,6 @@ def stock_darkinel_actualizado(stock_consolidado: pd.DataFrame, df_pick: pd.Data
         base = pd.DataFrame(columns=["articulo", "descripcion", "estado", "unidad", "cantidad", "codigo_normalizado", "lineas_sumadas"])
     base["cantidad"] = pd.to_numeric(base["cantidad"], errors="coerce").fillna(0)
 
-    if not df_pick.empty:
-        trabajo = normalizar_df_pick(df_pick)
-        manuales = trabajo[~trabajo["codigo_normalizado"].isin(base["codigo_normalizado"])].copy()
-        if not manuales.empty:
-            manuales_base = (
-                manuales.groupby("codigo_normalizado", as_index=False)
-                .agg(
-                    articulo=("articulo", _primer_valor_no_vacio),
-                    descripcion=("descripcion", _primer_valor_no_vacio),
-                    estado=("estado", _primer_valor_no_vacio),
-                    unidad=("unidad", _primer_valor_no_vacio),
-                    cantidad=("stock_total", "max"),
-                )
-            )
-            manuales_base["estado"] = manuales_base["estado"].replace("", "MANUAL")
-            manuales_base["lineas_sumadas"] = 0
-            base = pd.concat([base, manuales_base], ignore_index=True)
-
     mudado = mudado_por_codigo(df_pick)
     actualizado = base.merge(mudado, on="codigo_normalizado", how="left")
     actualizado["mudado_al_polo"] = actualizado["mudado_al_polo"].fillna(0)
@@ -1626,6 +1653,32 @@ def stock_polo_desde_ubicaciones(ubicaciones: pd.DataFrame) -> pd.DataFrame:
 
 def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFrame, ubicaciones_anteriores: pd.DataFrame | None = None) -> pd.DataFrame:
     columnas = ["Artículo", "Descripción", "Stock total Polo", "Código normalizado"]
+    if df_pick is not None and not df_pick.empty:
+        trabajo = normalizar_df_pick(df_pick)
+        trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
+        trabajo = trabajo[(trabajo["codigo_normalizado"].astype(str).str.strip() != "") & (trabajo["cantidad_mudada"] > 0)].copy()
+        if trabajo.empty:
+            return pd.DataFrame(columns=columnas)
+        res = (
+            trabajo.groupby("codigo_normalizado", as_index=False)
+            .agg(
+                articulo=("articulo", _primer_valor_no_vacio),
+                descripcion=("descripcion", _primer_valor_no_vacio),
+                stock_total_polo=("cantidad_mudada", "sum"),
+            )
+            .rename(
+                columns={
+                    "articulo": "ArtÃ­culo",
+                    "descripcion": "DescripciÃ³n",
+                    "stock_total_polo": "Stock total Polo",
+                    "codigo_normalizado": "CÃ³digo normalizado",
+                }
+            )
+        )
+        res.columns = [columnas[3], columnas[0], columnas[1], columnas[2]]
+        res["Stock total Polo"] = res["Stock total Polo"].apply(formatear_numero)
+        return res[columnas]
+
     ubicaciones_consolidadas = ubicacion_polo_logistico(df_pick, ubicaciones_anteriores)
     desde_ubicaciones = stock_polo_desde_ubicaciones(ubicaciones_consolidadas)
     if not desde_ubicaciones.empty or not ubicaciones_consolidadas.empty:
@@ -2438,6 +2491,8 @@ df_pick = pick_items_df()
 df_reimpresion = detalle_excel_a_pick_items(detalle_mudanza_anterior)
 df_operativo = df_pick if not df_pick.empty else df_reimpresion
 usando_control_anterior = df_pick.empty and not df_reimpresion.empty
+mudanza_activa_es_control_anterior = misma_mudanza(df_pick, df_reimpresion)
+ubicaciones_operativas = pd.DataFrame() if usando_control_anterior or mudanza_activa_es_control_anterior else ubicaciones_anteriores
 
 if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not df_reimpresion.empty:
     st.info(f"El control anterior cargado trae {len(df_reimpresion)} línea(s) de mudanza.")
@@ -2751,7 +2806,7 @@ with tab_pallets:
             st.rerun()
 
     if not df_operativo.empty:
-        excel_bytes = generar_excel_control(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_anteriores, historial_anterior)
+        excel_bytes = generar_excel_control(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_operativas, historial_anterior)
         st.download_button(
             "Descargar control actualizado Excel",
             data=excel_bytes,
@@ -3049,16 +3104,16 @@ with tab_bases:
     st.dataframe(darkinel_actual, use_container_width=True, hide_index=True)
 
     st.subheader("STOCK_POLO_LOGISTICO")
-    polo_actual = stock_polo_actualizado(df_operativo, stock_polo_anterior, ubicaciones_anteriores)
+    polo_actual = stock_polo_actualizado(df_operativo, stock_polo_anterior, ubicaciones_operativas)
     st.dataframe(polo_actual, use_container_width=True, hide_index=True)
 
     st.subheader("UBICACION_POLO_LOGISTICO")
-    ubicacion_actual = ubicacion_polo_logistico(df_operativo, ubicaciones_anteriores)
+    ubicacion_actual = ubicacion_polo_logistico(df_operativo, ubicaciones_operativas)
     st.dataframe(ubicacion_actual, use_container_width=True, hide_index=True)
 
 with tab_stock:
     st.subheader("Consulta de stock por código")
-    inventario_consulta = inventario_para_buscar(stock_consolidado, df_operativo, ubicaciones_anteriores, frecuencias_df)
+    inventario_consulta = inventario_para_buscar(stock_consolidado, df_operativo, ubicaciones_operativas, frecuencias_df)
     codigo_consulta = st.text_input("Código / lectura scanner", placeholder="Ej: KCYB-50-22X")
 
     if codigo_consulta:
