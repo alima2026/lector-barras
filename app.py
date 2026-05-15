@@ -2532,9 +2532,9 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Frecuencia opcional")
     uploaded_frecuencia = st.file_uploader(
-        "SubÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­ archivo de frecuencia / meses de venta",
+        "Subi archivo de frecuencia / meses de venta",
         type=["xls", "xlsx", "xlsm", "csv"],
-        help="Debe tener una columna de ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo/CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo y una columna Frecuencia/CategorÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­a o Meses.",
+        help="Debe tener una columna de Articulo/Codigo y una columna Frecuencia/Categoria o Meses.",
     )
 
     frecuencia_guardada_sidebar = cargar_archivo_estado("frecuencia_ventas_actual")
@@ -2557,9 +2557,9 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Base Polo anterior opcional")
     uploaded_polo = st.file_uploader(
-        "SubÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­ el ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºltimo control generado para seguir actualizando el POLO",
+        "Subi el ultimo control generado para seguir actualizando el POLO",
         type=["xls", "xlsx", "xlsm"],
-        help="Opcional. Si lo subÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­s, la app suma esta mudanza al stock y ubicaciones ya existentes del Polo LogÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­stico.",
+        help="Opcional. Si lo subis, la app toma esa mudanza y ubicaciones para continuar el control del Polo Logistico.",
     )
 
     st.markdown("---")
@@ -2588,7 +2588,7 @@ with st.sidebar:
     bulto_activo = st.number_input("Caja activa", min_value=1, max_value=int(cantidad_bultos_activo), value=1, step=1)
     ubicacion_default = st.text_input(
         "UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n base opcional",
-        value="",
+        help="Podes dejarla vacia al cargar la mudanza y completarla cuando llegue al Polo. Ejemplo final: 1-L-3",
         help="PodÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©s dejarla vacÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­a al cargar la mudanza y completarla cuando llegue al Polo. Ejemplo final: 1-L-3",
     )
 
@@ -2742,7 +2742,7 @@ with tab_buscar:
 
             if not exactos.empty:
                 st.success(f"Encontre {len(exactos)} articulo(s) con stock consolidado.")
-                st.dataframe(preparar_resultado_para_mostrar(exactos), use_container_width=True, hide_index=True)
+                st.dataframe(limpiar_df_visible(preparar_resultado_para_mostrar(exactos)), use_container_width=True, hide_index=True)
                 permitir_agregar_desde_base = True
                 sugerencias = pd.DataFrame()
             else:
@@ -2751,7 +2751,7 @@ with tab_buscar:
                 if sugerencias.empty:
                     st.info("No hay sugerencias para esa lectura.")
                 else:
-                    st.dataframe(preparar_resultado_para_mostrar(sugerencias), use_container_width=True, hide_index=True)
+                    st.dataframe(limpiar_df_visible(preparar_resultado_para_mostrar(sugerencias)), use_container_width=True, hide_index=True)
                 permitir_agregar_desde_base = False
                 st.info("Elegi una sugerencia si corresponde al articulo leido. Si ninguna sirve, cargalo como articulo nuevo/manual.")
 
@@ -2906,7 +2906,7 @@ with tab_buscar:
                             agregados += 1
                         else:
                             errores.append(f"{linea}: {msg}")
-            st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
+            st.dataframe(limpiar_df_visible(pd.DataFrame(filas)), use_container_width=True, hide_index=True)
             if agregar_varios:
                 if agregados:
                     st.success(f"Agregue {agregados} articulo(s) a la mudanza.")
@@ -2919,12 +2919,12 @@ with tab_buscar:
 
 with tab_pallets:
     st.subheader("Composicion por pallet")
-    st.dataframe(resumen_pallets(df_operativo), use_container_width=True, hide_index=True)
+    st.dataframe(limpiar_df_visible(resumen_pallets(df_operativo)), use_container_width=True, hide_index=True)
 
     st.subheader("Detalle de mudanza")
     detalle_display = preparar_detalle_mudanza(df_operativo)
     if df_pick.empty:
-        st.dataframe(detalle_display, use_container_width=True, hide_index=True)
+        st.dataframe(limpiar_df_visible(detalle_display), use_container_width=True, hide_index=True)
     else:
         detalle_editor_base = normalizar_df_pick(df_pick)
         detalle_editor_base["piezas_en_caja"] = detalle_editor_base.apply(lambda r: piezas_en_caja_de_fila(r), axis=1)
@@ -3360,23 +3360,23 @@ with tab_salidas:
                         st.rerun()
 
     st.subheader("Historial de salidas Polo")
-    st.dataframe(mostrar_salidas_polo(salidas_polo_actual), use_container_width=True, hide_index=True)
+    st.dataframe(limpiar_df_visible(mostrar_salidas_polo(salidas_polo_actual)), use_container_width=True, hide_index=True)
 
 with tab_bases:
     st.subheader("STOCK_DARKINEL_ACTUALIZADO")
     darkinel_actual = stock_darkinel_actualizado(stock_consolidado, df_operativo)
-    st.dataframe(darkinel_actual, use_container_width=True, hide_index=True)
+    st.dataframe(limpiar_df_visible(darkinel_actual), use_container_width=True, hide_index=True)
 
     st.subheader("STOCK_POLO_LOGISTICO")
     polo_actual = stock_polo_actualizado(df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
-    st.dataframe(polo_actual, use_container_width=True, hide_index=True)
+    st.dataframe(limpiar_df_visible(polo_actual), use_container_width=True, hide_index=True)
 
     st.subheader("UBICACION_POLO_LOGISTICO")
     ubicacion_actual = aplicar_salidas_a_ubicaciones(ubicacion_polo_logistico(df_operativo, ubicaciones_operativas), salidas_polo_actual)
-    st.dataframe(ubicacion_actual, use_container_width=True, hide_index=True)
+    st.dataframe(limpiar_df_visible(ubicacion_actual), use_container_width=True, hide_index=True)
 
     st.subheader("SALIDAS_POLO")
-    st.dataframe(mostrar_salidas_polo(salidas_polo_actual), use_container_width=True, hide_index=True)
+    st.dataframe(limpiar_df_visible(mostrar_salidas_polo(salidas_polo_actual)), use_container_width=True, hide_index=True)
 
 with tab_stock:
     st.subheader("Consulta de stock por codigo")
@@ -3391,8 +3391,8 @@ with tab_stock:
         if resultado_consulta.empty:
             st.warning("No encontre ese codigo en Darkinel ni en Polo.")
         else:
-            st.dataframe(mostrar_inventario(resultado_consulta), use_container_width=True, hide_index=True)
+            st.dataframe(limpiar_df_visible(mostrar_inventario(resultado_consulta)), use_container_width=True, hide_index=True)
     else:
-        st.dataframe(mostrar_inventario(inventario_consulta.head(100)), use_container_width=True, hide_index=True)
+        st.dataframe(limpiar_df_visible(mostrar_inventario(inventario_consulta.head(100))), use_container_width=True, hide_index=True)
 
     st.caption("Frecuencia: A = 0 a 6 meses, B = 6,1 a 12, C = 12,1 a 18, E = 18,1 a 24, F = 24,1 a 38, Scrap = mas de 38 meses.")
