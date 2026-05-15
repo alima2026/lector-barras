@@ -35,19 +35,19 @@ except ModuleNotFoundError:
 
 
 # ==========================================================
-# APP: Lector Mazda/Kia/Multimarca contra stock + mudanza de depósitos
+# APP: Lector Mazda/Kia/Multimarca contra stock + mudanza de depÃ³sitos
 # Autor: preparado para Carlos / Alimatico
 # ==========================================================
 
 st.set_page_config(
-    page_title="Lector de códigos Mazda - Stock, Pallets y Depósitos",
-    page_icon="🔎",
+    page_title="Lector de cÃ³digos Mazda - Stock, Pallets y DepÃ³sitos",
+    page_icon="ðŸ”Ž",
     layout="wide",
 )
 
 
 # -----------------------------
-# Normalización de códigos
+# NormalizaciÃ³n de cÃ³digos
 # -----------------------------
 DB_PATH = Path(__file__).resolve().parent / "data" / "mudanza_estado.sqlite"
 CLOUD_TABLE = "estado_app"
@@ -217,6 +217,19 @@ def guardar_mudanza_actual_db() -> None:
     )
 
 
+def guardar_salidas_polo_db() -> None:
+    guardar_estado_db("salidas_polo", {"salidas": st.session_state.get("salidas_polo", []), "salida_seq": st.session_state.get("salida_seq", 0)})
+
+
+def cargar_salidas_polo_db() -> Dict[str, object]:
+    estado = cargar_estado_db("salidas_polo", {"salidas": [], "salida_seq": 0})
+    if not isinstance(estado, dict):
+        return {"salidas": [], "salida_seq": 0}
+    estado.setdefault("salidas", [])
+    estado.setdefault("salida_seq", 0)
+    return estado
+
+
 def cargar_mudanza_actual_db() -> Dict[str, object]:
     estado = cargar_estado_db("mudanza_actual", {"pick_items": [], "pick_seq": 0})
     if not isinstance(estado, dict):
@@ -263,16 +276,16 @@ def guardar_archivo_si_cambio(clave: str, nombre: str, contenido: bytes) -> None
 
 def normalizar_codigo(valor) -> str:
     """
-    Convierte cualquier código a una forma comparable:
-    - Mayúsculas
+    Convierte cualquier cÃ³digo a una forma comparable:
+    - MayÃºsculas
     - Sin espacios
     - Sin guiones
     - Sin asteriscos
-    - Sin símbolos raros del lector: ', ¡, ., #, etc.
+    - Sin sÃ­mbolos raros del lector: ', Â¡, ., #, etc.
     """
     if pd.isna(valor):
         return ""
-    texto = str(valor).upper().strip().replace("Ñ", "N")
+    texto = str(valor).upper().strip().replace("Ã‘", "N")
     return re.sub(r"[^A-Z0-9]", "", texto)
 
 
@@ -418,7 +431,7 @@ def formatear_fila_origen(valor) -> str:
 
 
 def unir_filas_origen(serie: pd.Series) -> str:
-    """Une filas de origen soportando números y textos ya consolidados."""
+    """Une filas de origen soportando nÃºmeros y textos ya consolidados."""
     valores = []
     for valor in serie:
         texto = formatear_fila_origen(valor)
@@ -433,7 +446,7 @@ def unir_filas_origen(serie: pd.Series) -> str:
 
 def extraer_candidatos_mazda(codigo_leido: str) -> Dict[str, object]:
     """
-    Recibe la lectura cruda del scanner y genera candidatos de búsqueda.
+    Recibe la lectura cruda del scanner y genera candidatos de bÃºsqueda.
     Sirve para Mazda/Kia/Multimarca porque compara todo normalizado.
     """
     raw = "" if codigo_leido is None else str(codigo_leido).strip().upper()
@@ -452,7 +465,7 @@ def extraer_candidatos_mazda(codigo_leido: str) -> Dict[str, object]:
             codigos_largos.append(token)
             agregar_unico(candidatos, token)
 
-            # Si viene pegado con sufijo, también pruebo una versión base de 10 caracteres.
+            # Si viene pegado con sufijo, tambiÃ©n pruebo una versiÃ³n base de 10 caracteres.
             if len(token) > 10:
                 agregar_unico(candidatos, token[:10])
                 extra = token[10:]
@@ -521,7 +534,7 @@ def limpiar_stock_desde_reporte(df_raw: pd.DataFrame) -> pd.DataFrame:
     articulo, descripcion, estado, unidad, cantidad, codigo_normalizado.
     Si el reporte no trae encabezados claros, usa el formato real del reporte de stock.
     """
-    fila_art, col_art = buscar_columna_por_texto(df_raw, ["Artículo", "Articulo"])
+    fila_art, col_art = buscar_columna_por_texto(df_raw, ["ArtÃ­culo", "Articulo"])
     _, col_estado = buscar_columna_por_texto(df_raw, ["Estado"])
     _, col_unidad = buscar_columna_por_texto(df_raw, ["Unidad"])
     _, col_cantidad = buscar_columna_por_texto(df_raw, ["Cantidad", "Stock"])
@@ -744,9 +757,9 @@ def leer_frecuencias(file_bytes: bytes, filename: str) -> pd.DataFrame:
     tabla.columns = [str(c).strip() if pd.notna(c) else "" for c in raw.iloc[header_row].tolist()]
     tabla = tabla.dropna(how="all")
 
-    col_codigo = extraer_columna(tabla, ["Artículo", "Articulo", "Codigo", "Código", "Código normalizado", "Codigo normalizado", "SKU"])
-    col_categoria = extraer_columna(tabla, ["Frecuencia", "Categoria", "Categoría", "ABC"])
-    col_meses = extraer_columna(tabla, ["Meses", "Meses venta", "Meses sin venta", "Antiguedad", "Antigüedad"])
+    col_codigo = extraer_columna(tabla, ["ArtÃ­culo", "Articulo", "Codigo", "CÃ³digo", "CÃ³digo normalizado", "Codigo normalizado", "SKU"])
+    col_categoria = extraer_columna(tabla, ["Frecuencia", "Categoria", "CategorÃ­a", "ABC"])
+    col_meses = extraer_columna(tabla, ["Meses", "Meses venta", "Meses sin venta", "Antiguedad", "AntigÃ¼edad"])
     if not col_codigo:
         return pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
 
@@ -763,7 +776,7 @@ def leer_frecuencias(file_bytes: bytes, filename: str) -> pd.DataFrame:
 
 
 # -----------------------------
-# Consolidación y búsqueda
+# ConsolidaciÃ³n y bÃºsqueda
 # -----------------------------
 def _primer_valor_no_vacio(serie: pd.Series) -> str:
     for valor in serie:
@@ -783,7 +796,7 @@ def _unir_valores_unicos(serie: pd.Series) -> str:
 
 
 def consolidar_por_codigo(df: pd.DataFrame) -> pd.DataFrame:
-    """Si el mismo código aparece varias veces, suma cantidades. Ej.: 316 + 49 = 365."""
+    """Si el mismo cÃ³digo aparece varias veces, suma cantidades. Ej.: 316 + 49 = 365."""
     if df.empty:
         return df
 
@@ -877,13 +890,13 @@ def preparar_resultado_para_mostrar(df: pd.DataFrame) -> pd.DataFrame:
     return df[cols].rename(
         columns={
             "match_con": "Match",
-            "articulo": "Artículo en stock",
-            "descripcion": "Descripción",
+            "articulo": "ArtÃ­culo en stock",
+            "descripcion": "DescripciÃ³n",
             "estado": "Estado",
             "unidad": "Unidad",
             "cantidad": "Stock total",
-            "lineas_sumadas": "Líneas sumadas",
-            "codigo_normalizado": "Código normalizado",
+            "lineas_sumadas": "LÃ­neas sumadas",
+            "codigo_normalizado": "CÃ³digo normalizado",
             "puntaje": "Coincidencia",
         }
     )
@@ -894,6 +907,7 @@ def inventario_para_buscar(
     df_pick: pd.DataFrame,
     ubicaciones_anteriores: pd.DataFrame,
     frecuencias: pd.DataFrame,
+    salidas: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     columnas = ["codigo_normalizado", "articulo", "descripcion", "deposito", "ubicacion", "cantidad", "frecuencia"]
     partes = []
@@ -902,9 +916,9 @@ def inventario_para_buscar(
     if not darkinel.empty:
         dark = pd.DataFrame(
             {
-                "codigo_normalizado": darkinel["Código normalizado"].astype(str).str.strip(),
-                "articulo": darkinel["Artículo"].astype(str).str.strip(),
-                "descripcion": darkinel["Descripción"].astype(str).str.strip(),
+                "codigo_normalizado": darkinel["CÃ³digo normalizado"].astype(str).str.strip(),
+                "articulo": darkinel["ArtÃ­culo"].astype(str).str.strip(),
+                "descripcion": darkinel["DescripciÃ³n"].astype(str).str.strip(),
                 "deposito": "DARKINEL",
                 "ubicacion": "DARKINEL",
                 "cantidad": pd.to_numeric(darkinel["Stock restante Darkinel"], errors="coerce").fillna(0),
@@ -912,7 +926,7 @@ def inventario_para_buscar(
         )
         partes.append(dark[dark["cantidad"] > 0].copy())
 
-    trabajo_polo = normalizar_df_pick(df_pick) if df_pick is not None and not df_pick.empty else pd.DataFrame()
+    trabajo_polo = normalizar_df_pick(df_pick) if df_pick is not None and not df_pick.empty and (salidas is None or salidas.empty) else pd.DataFrame()
     if not trabajo_polo.empty:
         polo = pd.DataFrame(
             {
@@ -934,13 +948,14 @@ def inventario_para_buscar(
         ubicaciones_anteriores = pd.DataFrame()
 
     ubicaciones = ubicacion_polo_logistico(df_pick, ubicaciones_anteriores)
+    ubicaciones = aplicar_salidas_a_ubicaciones(ubicaciones, salidas)
     if not ubicaciones.empty:
-        ubic_col = extraer_columna(ubicaciones, ["Ubicación", "Ubicacion"])
+        ubic_col = extraer_columna(ubicaciones, ["UbicaciÃ³n", "Ubicacion"])
         polo = pd.DataFrame(
             {
-                "codigo_normalizado": ubicaciones["Código normalizado"].astype(str).str.strip(),
-                "articulo": ubicaciones["Artículo"].astype(str).str.strip(),
-                "descripcion": ubicaciones["Descripción"].astype(str).str.strip(),
+                "codigo_normalizado": ubicaciones["CÃ³digo normalizado"].astype(str).str.strip(),
+                "articulo": ubicaciones["ArtÃ­culo"].astype(str).str.strip(),
+                "descripcion": ubicaciones["DescripciÃ³n"].astype(str).str.strip(),
                 "deposito": "POLO LOGISTICO",
                 "ubicacion": ubicaciones[ubic_col].astype(str).str.strip().str.upper() if ubic_col else "",
                 "cantidad": pd.to_numeric(ubicaciones["Piezas"], errors="coerce").fillna(0),
@@ -1000,20 +1015,99 @@ def buscar_en_inventario(inventario: pd.DataFrame, texto: str) -> pd.DataFrame:
 
 
 def mostrar_inventario(df: pd.DataFrame) -> pd.DataFrame:
-    columnas = ["Código normalizado", "Artículo", "Descripción", "Depósito", "Locación", "Cantidad", "Frecuencia"]
+    columnas = ["CÃ³digo normalizado", "ArtÃ­culo", "DescripciÃ³n", "DepÃ³sito", "LocaciÃ³n", "Cantidad", "Frecuencia"]
     if df.empty:
         return pd.DataFrame(columns=columnas)
     return df.rename(
         columns={
-            "codigo_normalizado": "Código normalizado",
-            "articulo": "Artículo",
-            "descripcion": "Descripción",
-            "deposito": "Depósito",
-            "ubicacion": "Locación",
+            "codigo_normalizado": "CÃ³digo normalizado",
+            "articulo": "ArtÃ­culo",
+            "descripcion": "DescripciÃ³n",
+            "deposito": "DepÃ³sito",
+            "ubicacion": "LocaciÃ³n",
             "cantidad": "Cantidad",
             "frecuencia": "Frecuencia",
         }
     )[columnas]
+
+
+def salidas_polo_df() -> pd.DataFrame:
+    columnas = ["salida_id", "fecha_hora", "codigo_normalizado", "articulo", "descripcion", "ubicacion", "cantidad", "responsable", "observaciones"]
+    df = pd.DataFrame(st.session_state.get("salidas_polo", []))
+    if df.empty:
+        return pd.DataFrame(columns=columnas)
+    for col in columnas:
+        if col not in df.columns:
+            df[col] = "" if col not in ["salida_id", "cantidad"] else 0
+    df["salida_id"] = pd.to_numeric(df["salida_id"], errors="coerce").fillna(0).astype(int)
+    df["codigo_normalizado"] = df["codigo_normalizado"].map(normalizar_codigo)
+    df["ubicacion"] = df["ubicacion"].fillna("").astype(str).str.strip().str.upper()
+    df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
+    return df[columnas]
+
+
+def mostrar_salidas_polo(df: pd.DataFrame) -> pd.DataFrame:
+    columnas = ["Fecha/Hora", "Codigo normalizado", "Articulo", "Descripcion", "Locacion", "Cantidad", "Responsable", "Observaciones"]
+    if df.empty:
+        return pd.DataFrame(columns=columnas)
+    salida = df.rename(
+        columns={
+            "fecha_hora": "Fecha/Hora",
+            "codigo_normalizado": "Codigo normalizado",
+            "articulo": "Articulo",
+            "descripcion": "Descripcion",
+            "ubicacion": "Locacion",
+            "cantidad": "Cantidad",
+            "responsable": "Responsable",
+            "observaciones": "Observaciones",
+        }
+    )
+    salida["Cantidad"] = salida["Cantidad"].apply(formatear_numero)
+    return salida[columnas]
+
+
+def aplicar_salidas_a_ubicaciones(ubicaciones: pd.DataFrame, salidas: pd.DataFrame) -> pd.DataFrame:
+    if ubicaciones is None or ubicaciones.empty:
+        return ubicaciones
+    trabajo = ubicaciones.copy()
+    if salidas is None or salidas.empty:
+        return trabajo
+
+    ubic_col = extraer_columna(trabajo, ["UbicaciÃƒÂ³n", "Ubicacion", "UbicaciÃƒÂ³n Polo", "Ubicacion Polo"])
+    piezas_col = extraer_columna(trabajo, ["Piezas", "Piezas enviadas", "Piezas en esta caja", "Cantidad mudada"])
+    norm_col = extraer_columna(trabajo, ["CÃƒÂ³digo normalizado", "Codigo normalizado"])
+    if not ubic_col or not piezas_col or not norm_col:
+        return trabajo
+
+    trabajo["_codigo_salida"] = trabajo[norm_col].map(normalizar_codigo)
+    trabajo["_ubicacion_salida"] = trabajo[ubic_col].fillna("").astype(str).str.strip().str.upper()
+    trabajo["_piezas_num"] = pd.to_numeric(trabajo[piezas_col], errors="coerce").fillna(0)
+
+    sal = salidas.copy()
+    sal["codigo_normalizado"] = sal["codigo_normalizado"].map(normalizar_codigo)
+    sal["ubicacion"] = sal["ubicacion"].fillna("").astype(str).str.strip().str.upper()
+    sal["cantidad"] = pd.to_numeric(sal["cantidad"], errors="coerce").fillna(0)
+    salidas_por_locacion = sal.groupby(["codigo_normalizado", "ubicacion"])["cantidad"].sum().to_dict()
+
+    restantes = []
+    for _, row in trabajo.iterrows():
+        clave = (row["_codigo_salida"], row["_ubicacion_salida"])
+        descontar = float(salidas_por_locacion.get(clave, 0) or 0)
+        piezas = float(row["_piezas_num"] or 0)
+        if descontar > 0:
+            usado = min(piezas, descontar)
+            piezas -= usado
+            salidas_por_locacion[clave] = descontar - usado
+        restantes.append(piezas)
+
+    trabajo[piezas_col] = restantes
+    trabajo = trabajo[pd.to_numeric(trabajo[piezas_col], errors="coerce").fillna(0) > 0].copy()
+    trabajo[piezas_col] = pd.to_numeric(trabajo[piezas_col], errors="coerce").fillna(0).apply(formatear_numero)
+    return trabajo.drop(columns=["_codigo_salida", "_ubicacion_salida", "_piezas_num"], errors="ignore")
+
+
+def stock_polo_desde_ubicaciones_con_salidas(ubicaciones: pd.DataFrame, salidas: pd.DataFrame) -> pd.DataFrame:
+    return stock_polo_desde_ubicaciones(aplicar_salidas_a_ubicaciones(ubicaciones, salidas))
 
 
 def firma_lineas_mudanza(df: pd.DataFrame) -> set:
@@ -1060,7 +1154,7 @@ def formulario_agregar_desde_base(
     for i, row in opciones_reset.iterrows():
         opciones.append(f"{i + 1}) {row.get('articulo', '')} | {row.get('descripcion', '')} | Stock {row.get('cantidad', 0)}")
 
-    opcion = st.selectbox("Artículo", opciones, key=f"{form_key}_select")
+    opcion = st.selectbox("ArtÃ­culo", opciones, key=f"{form_key}_select")
     idx = opciones.index(opcion)
     row_sel = opciones_reset.iloc[idx]
 
@@ -1068,7 +1162,7 @@ def formulario_agregar_desde_base(
     disponible = max(disponible, 0)
 
     if disponible <= 0:
-        st.warning("Este código ya quedó totalmente marcado para mudanza en los pallets actuales.")
+        st.warning("Este cÃ³digo ya quedÃ³ totalmente marcado para mudanza en los pallets actuales.")
         return
 
     with st.form(form_key):
@@ -1077,7 +1171,7 @@ def formulario_agregar_desde_base(
         pallet = c2.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1, key=f"{form_key}_pallet")
         cantidad_bultos = c3.number_input("Cantidad de cajas", min_value=1, value=int(cantidad_bultos_activo), step=1, key=f"{form_key}_cajas")
         bulto = c4.number_input("Caja", min_value=1, max_value=int(cantidad_bultos), value=min(int(bulto_activo), int(cantidad_bultos)), step=1, key=f"{form_key}_bulto")
-        ubicacion = c5.text_input("Ubicación en Polo", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3", key=f"{form_key}_ubicacion")
+        ubicacion = c5.text_input("UbicaciÃ³n en Polo", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3", key=f"{form_key}_ubicacion")
         observaciones = st.text_input("Observaciones", placeholder="Opcional", key=f"{form_key}_obs")
         submit = st.form_submit_button("Agregar a mudanza", type="primary")
 
@@ -1106,7 +1200,7 @@ def formulario_agregar_desde_base(
 
 
 # -----------------------------
-# Picking / mudanza / depósitos
+# Picking / mudanza / depÃ³sitos
 # -----------------------------
 def inicializar_estado() -> None:
     if "pick_items" not in st.session_state:
@@ -1115,8 +1209,14 @@ def inicializar_estado() -> None:
     if "pick_seq" not in st.session_state:
         estado_db = cargar_mudanza_actual_db()
         st.session_state.pick_seq = int(estado_db.get("pick_seq", 0) or 0)
+    if "salidas_polo" not in st.session_state:
+        estado_salidas = cargar_salidas_polo_db()
+        st.session_state.salidas_polo = estado_salidas.get("salidas", [])
+    if "salida_seq" not in st.session_state:
+        estado_salidas = cargar_salidas_polo_db()
+        st.session_state.salida_seq = int(estado_salidas.get("salida_seq", 0) or 0)
 
-    # Migración automática: si la sesión venía de una versión anterior,
+    # MigraciÃ³n automÃ¡tica: si la sesiÃ³n venÃ­a de una versiÃ³n anterior,
     # convertimos bultos_pallet/bultos_item a cantidad_bultos/ubicacion.
     for item in st.session_state.pick_items:
         if "cantidad_bultos" not in item:
@@ -1148,15 +1248,15 @@ def cantidad_pickeada_por_codigo(codigo_normalizado: str) -> float:
 
 def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Deja la mudanza con las columnas nuevas aunque la sesión tenga datos viejos.
-    Evita errores cuando antes existían columnas como bultos_pallet o bultos_item.
+    Deja la mudanza con las columnas nuevas aunque la sesiÃ³n tenga datos viejos.
+    Evita errores cuando antes existÃ­an columnas como bultos_pallet o bultos_item.
     """
     if df is None or df.empty:
         return pd.DataFrame()
 
     trabajo = df.copy()
 
-    # Compatibilidad con la versión anterior de la app.
+    # Compatibilidad con la versiÃ³n anterior de la app.
     if "cantidad_bultos" not in trabajo.columns:
         if "bultos_pallet" in trabajo.columns:
             trabajo["cantidad_bultos"] = trabajo["bultos_pallet"]
@@ -1168,8 +1268,8 @@ def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
     if "ubicacion" not in trabajo.columns:
         if "bultos_item" in trabajo.columns:
             trabajo["ubicacion"] = trabajo["bultos_item"]
-        elif "Bulto(s) del artículo" in trabajo.columns:
-            trabajo["ubicacion"] = trabajo["Bulto(s) del artículo"]
+        elif "Bulto(s) del artÃ­culo" in trabajo.columns:
+            trabajo["ubicacion"] = trabajo["Bulto(s) del artÃ­culo"]
         else:
             trabajo["ubicacion"] = ""
 
@@ -1285,7 +1385,7 @@ def agregar_item_a_mudanza(
             "observaciones_recepcion": "",
         }
     )
-    return True, "Artículo agregado a la mudanza."
+    return True, "ArtÃ­culo agregado a la mudanza."
 
 
 def actualizar_ubicacion_item(item_id: int, nueva_ubicacion: str) -> Tuple[bool, str]:
@@ -1293,8 +1393,8 @@ def actualizar_ubicacion_item(item_id: int, nueva_ubicacion: str) -> Tuple[bool,
     for item in st.session_state.pick_items:
         if int(item.get("item_id", 0)) == int(item_id):
             item["ubicacion"] = ubicacion
-            return True, "Ubicación actualizada."
-    return False, "No encontré esa línea de mudanza."
+            return True, "UbicaciÃ³n actualizada."
+    return False, "No encontrÃ© esa lÃ­nea de mudanza."
 
 
 def actualizar_cantidad_item(item_id: int, nueva_cantidad: float) -> Tuple[bool, str]:
@@ -1308,7 +1408,7 @@ def actualizar_cantidad_item(item_id: int, nueva_cantidad: float) -> Tuple[bool,
             break
 
     if item_objetivo is None:
-        return False, "No encontré esa línea de mudanza."
+        return False, "No encontrÃ© esa lÃ­nea de mudanza."
 
     item_objetivo["cantidad_mudada"] = float(nueva_cantidad)
     return True, "Cantidad actualizada."
@@ -1345,8 +1445,8 @@ def actualizar_linea_item(
                 obs = str(item.get("observaciones", "")).strip()
                 marca = f"Stock real Darkinel restante: {float(stock_darkinel_restante):g}"
                 item["observaciones"] = f"{obs} | {marca}".strip(" |")
-            return True, "Línea actualizada."
-    return False, "No encontré esa línea de mudanza."
+            return True, "LÃ­nea actualizada."
+    return False, "No encontrÃ© esa lÃ­nea de mudanza."
 
 
 def pick_items_df() -> pd.DataFrame:
@@ -1378,21 +1478,21 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(
             columns=[
                 "Fecha/Hora",
-                "Depósito origen",
-                "Depósito destino",
+                "DepÃ³sito origen",
+                "DepÃ³sito destino",
                 "Pallet",
                 "Cantidad de cajas",
                 "Caja",
                 "Piezas en esta caja",
-                "Ubicación",
+                "UbicaciÃ³n",
                 "Lectura scanner",
-                "Artículo",
-                "Descripción",
+                "ArtÃ­culo",
+                "DescripciÃ³n",
                 "Unidad",
                 "Piezas enviadas",
                 "Stock original Darkinel",
                 "Stock restante Darkinel",
-                "Código normalizado",
+                "CÃ³digo normalizado",
                 "Observaciones",
             ]
         )
@@ -1422,21 +1522,21 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
     return df[cols].rename(
         columns={
             "fecha_hora": "Fecha/Hora",
-            "deposito_origen": "Depósito origen",
-            "deposito_destino": "Depósito destino",
+            "deposito_origen": "DepÃ³sito origen",
+            "deposito_destino": "DepÃ³sito destino",
             "pallet": "Pallet",
             "cantidad_bultos": "Cantidad de cajas",
             "bulto": "Caja",
             "piezas_en_caja": "Piezas en esta caja",
-            "ubicacion": "Ubicación",
+            "ubicacion": "UbicaciÃ³n",
             "lectura_scanner": "Lectura scanner",
-            "articulo": "Artículo",
-            "descripcion": "Descripción",
+            "articulo": "ArtÃ­culo",
+            "descripcion": "DescripciÃ³n",
             "unidad": "Unidad",
             "cantidad_mudada": "Piezas enviadas",
             "stock_total": "Stock original Darkinel",
             "stock_restante_darkinel": "Stock restante Darkinel",
-            "codigo_normalizado": "Código normalizado",
+            "codigo_normalizado": "CÃ³digo normalizado",
             "observaciones": "Observaciones",
         }
     )
@@ -1446,14 +1546,14 @@ def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(
             columns=[
-                "Depósito origen",
-                "Depósito destino",
+                "DepÃ³sito origen",
+                "DepÃ³sito destino",
                 "Pallet",
                 "Cantidad de cajas",
                 "Ubicaciones",
-                "Cantidad de códigos diferentes",
+                "Cantidad de cÃ³digos diferentes",
                 "Piezas totales",
-                "Códigos que componen el pallet",
+                "CÃ³digos que componen el pallet",
                 "Descripciones",
             ]
         )
@@ -1473,14 +1573,14 @@ def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
     resumen["unidades_totales"] = resumen["unidades_totales"].apply(formatear_numero)
     return resumen.rename(
         columns={
-            "deposito_origen": "Depósito origen",
-            "deposito_destino": "Depósito destino",
+            "deposito_origen": "DepÃ³sito origen",
+            "deposito_destino": "DepÃ³sito destino",
             "pallet": "Pallet",
             "cantidad_bultos": "Cantidad de cajas",
             "ubicaciones": "Ubicaciones",
-            "codigos_distintos": "Cantidad de códigos diferentes",
+            "codigos_distintos": "Cantidad de cÃ³digos diferentes",
             "unidades_totales": "Piezas totales",
-            "codigos": "Códigos que componen el pallet",
+            "codigos": "CÃ³digos que componen el pallet",
             "descripciones": "Descripciones",
         }
     )
@@ -1488,15 +1588,15 @@ def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
 
 def stock_darkinel_actualizado(stock_consolidado: pd.DataFrame, df_pick: pd.DataFrame) -> pd.DataFrame:
     columnas_finales = [
-        "Artículo",
-        "Descripción",
+        "ArtÃ­culo",
+        "DescripciÃ³n",
         "Estado",
         "Unidad",
         "Stock original Darkinel",
         "Mudado al Polo",
         "Stock restante Darkinel",
-        "Código normalizado",
-        "Líneas sumadas",
+        "CÃ³digo normalizado",
+        "LÃ­neas sumadas",
         "Control",
     ]
     if stock_consolidado.empty and df_pick.empty:
@@ -1517,15 +1617,15 @@ def stock_darkinel_actualizado(stock_consolidado: pd.DataFrame, df_pick: pd.Data
         actualizado[col] = actualizado[col].apply(formatear_numero)
     return actualizado.rename(
         columns={
-            "articulo": "Artículo",
-            "descripcion": "Descripción",
+            "articulo": "ArtÃ­culo",
+            "descripcion": "DescripciÃ³n",
             "estado": "Estado",
             "unidad": "Unidad",
             "cantidad": "Stock original Darkinel",
             "mudado_al_polo": "Mudado al Polo",
             "stock_restante_darkinel": "Stock restante Darkinel",
-            "codigo_normalizado": "Código normalizado",
-            "lineas_sumadas": "Líneas sumadas",
+            "codigo_normalizado": "CÃ³digo normalizado",
+            "lineas_sumadas": "LÃ­neas sumadas",
             "control": "Control",
         }
     )[columnas_finales]
@@ -1574,9 +1674,9 @@ def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
 
     col_map = {
         "Fecha/Hora": "fecha_hora",
-        "Depósito origen": "deposito_origen",
+        "DepÃ³sito origen": "deposito_origen",
         "Deposito origen": "deposito_origen",
-        "Depósito destino": "deposito_destino",
+        "DepÃ³sito destino": "deposito_destino",
         "Deposito destino": "deposito_destino",
         "Pallet": "pallet",
         "Cantidad de cajas": "cantidad_bultos",
@@ -1584,25 +1684,25 @@ def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
         "Caja": "bulto",
         "Bulto": "bulto",
         "Cajas del item": "bultos_item",
-        "Cajas del ítem": "bultos_item",
+        "Cajas del Ã­tem": "bultos_item",
         "Bultos del item": "bultos_item",
-        "Bultos del ítem": "bultos_item",
+        "Bultos del Ã­tem": "bultos_item",
         "Caja = Cantidad": "cantidades_bulto",
         "Piezas por caja": "cantidades_bulto",
         "Cantidades por bulto": "cantidades_bulto",
-        "Ubicación": "ubicacion",
+        "UbicaciÃ³n": "ubicacion",
         "Ubicacion": "ubicacion",
         "Lectura scanner": "lectura_scanner",
-        "Artículo": "articulo",
+        "ArtÃ­culo": "articulo",
         "Articulo": "articulo",
-        "Descripción": "descripcion",
+        "DescripciÃ³n": "descripcion",
         "Descripcion": "descripcion",
         "Unidad": "unidad",
         "Piezas enviadas": "cantidad_mudada",
         "Cantidad mudada": "cantidad_mudada",
         "Stock original Darkinel": "stock_total",
         "Stock restante Darkinel": "stock_restante_darkinel",
-        "Código normalizado": "codigo_normalizado",
+        "CÃ³digo normalizado": "codigo_normalizado",
         "Codigo normalizado": "codigo_normalizado",
         "Observaciones": "observaciones",
     }
@@ -1624,49 +1724,55 @@ def es_ubicacion_real(valor) -> bool:
 
 
 def stock_polo_desde_ubicaciones(ubicaciones: pd.DataFrame) -> pd.DataFrame:
-    columnas = ["Artículo", "Descripción", "Stock total Polo", "Código normalizado"]
+    columnas = ["ArtÃ­culo", "DescripciÃ³n", "Stock total Polo", "CÃ³digo normalizado"]
     if ubicaciones is None or ubicaciones.empty:
         return pd.DataFrame(columns=columnas)
 
-    art_col = extraer_columna(ubicaciones, ["Artículo", "Articulo"])
-    desc_col = extraer_columna(ubicaciones, ["Descripción", "Descripcion"])
+    art_col = extraer_columna(ubicaciones, ["ArtÃ­culo", "Articulo"])
+    desc_col = extraer_columna(ubicaciones, ["DescripciÃ³n", "Descripcion"])
     piezas_col = extraer_columna(ubicaciones, ["Piezas", "Piezas enviadas", "Piezas en esta caja", "Cantidad mudada"])
-    norm_col = extraer_columna(ubicaciones, ["Código normalizado", "Codigo normalizado"])
-    ubic_col = extraer_columna(ubicaciones, ["Ubicación", "Ubicacion", "Ubicación Polo", "Ubicacion Polo"])
+    norm_col = extraer_columna(ubicaciones, ["CÃ³digo normalizado", "Codigo normalizado"])
+    ubic_col = extraer_columna(ubicaciones, ["UbicaciÃ³n", "Ubicacion", "UbicaciÃ³n Polo", "Ubicacion Polo"])
 
     if not art_col or not piezas_col:
         return pd.DataFrame(columns=columnas)
 
     trabajo = pd.DataFrame(
         {
-            "Artículo": ubicaciones[art_col].astype(str).str.strip(),
-            "Descripción": ubicaciones[desc_col].astype(str).str.strip() if desc_col else "",
+            "ArtÃ­culo": ubicaciones[art_col].astype(str).str.strip(),
+            "DescripciÃ³n": ubicaciones[desc_col].astype(str).str.strip() if desc_col else "",
             "Stock total Polo": pd.to_numeric(ubicaciones[piezas_col], errors="coerce").fillna(0),
-            "Código normalizado": ubicaciones[norm_col].astype(str).str.strip() if norm_col else ubicaciones[art_col].map(normalizar_codigo),
-            "Ubicación": ubicaciones[ubic_col].astype(str).str.strip().str.upper() if ubic_col else "",
+            "CÃ³digo normalizado": ubicaciones[norm_col].astype(str).str.strip() if norm_col else ubicaciones[art_col].map(normalizar_codigo),
+            "UbicaciÃ³n": ubicaciones[ubic_col].astype(str).str.strip().str.upper() if ubic_col else "",
         }
     )
-    trabajo = trabajo[trabajo["Ubicación"].apply(es_ubicacion_real)].copy()
+    trabajo = trabajo[trabajo["UbicaciÃ³n"].apply(es_ubicacion_real)].copy()
     if trabajo.empty:
         return pd.DataFrame(columns=columnas)
 
     res = (
-        trabajo.groupby("Código normalizado", as_index=False)
+        trabajo.groupby("CÃ³digo normalizado", as_index=False)
         .agg(
             **{
-                "Artículo": ("Artículo", _primer_valor_no_vacio),
-                "Descripción": ("Descripción", _primer_valor_no_vacio),
+                "ArtÃ­culo": ("ArtÃ­culo", _primer_valor_no_vacio),
+                "DescripciÃ³n": ("DescripciÃ³n", _primer_valor_no_vacio),
                 "Stock total Polo": ("Stock total Polo", "sum"),
             }
         )
     )
     res["Stock total Polo"] = res["Stock total Polo"].apply(formatear_numero)
-    return res[["Artículo", "Descripción", "Stock total Polo", "Código normalizado"]]
+    return res[["ArtÃ­culo", "DescripciÃ³n", "Stock total Polo", "CÃ³digo normalizado"]]
 
 
-def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFrame, ubicaciones_anteriores: pd.DataFrame | None = None) -> pd.DataFrame:
-    columnas = ["Artículo", "Descripción", "Stock total Polo", "Código normalizado"]
+def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFrame, ubicaciones_anteriores: pd.DataFrame | None = None, salidas: pd.DataFrame | None = None) -> pd.DataFrame:
+    columnas = ["ArtÃ­culo", "DescripciÃ³n", "Stock total Polo", "CÃ³digo normalizado"]
     if df_pick is not None and not df_pick.empty:
+        ubicaciones_actuales = ubicacion_polo_logistico(df_pick, ubicaciones_anteriores)
+        ubicaciones_actuales = aplicar_salidas_a_ubicaciones(ubicaciones_actuales, salidas)
+        desde_ubicaciones = stock_polo_desde_ubicaciones(ubicaciones_actuales)
+        if desde_ubicaciones.empty:
+            return pd.DataFrame(columns=columnas)
+        return desde_ubicaciones[columnas]
         trabajo = normalizar_df_pick(df_pick)
         trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
         trabajo = trabajo[(trabajo["codigo_normalizado"].astype(str).str.strip() != "") & (trabajo["cantidad_mudada"] > 0)].copy()
@@ -1681,10 +1787,10 @@ def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFr
             )
             .rename(
                 columns={
-                    "articulo": "ArtÃ­culo",
-                    "descripcion": "DescripciÃ³n",
+                    "articulo": "ArtÃƒÂ­culo",
+                    "descripcion": "DescripciÃƒÂ³n",
                     "stock_total_polo": "Stock total Polo",
-                    "codigo_normalizado": "CÃ³digo normalizado",
+                    "codigo_normalizado": "CÃƒÂ³digo normalizado",
                 }
             )
         )
@@ -1693,6 +1799,7 @@ def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFr
         return res[columnas]
 
     ubicaciones_consolidadas = ubicacion_polo_logistico(df_pick, ubicaciones_anteriores)
+    ubicaciones_consolidadas = aplicar_salidas_a_ubicaciones(ubicaciones_consolidadas, salidas)
     desde_ubicaciones = stock_polo_desde_ubicaciones(ubicaciones_consolidadas)
     if not desde_ubicaciones.empty or not ubicaciones_consolidadas.empty:
         return desde_ubicaciones
@@ -1712,28 +1819,28 @@ def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFr
                 )
                 .rename(
                     columns={
-                        "articulo": "Artículo",
-                        "descripcion": "Descripción",
+                        "articulo": "ArtÃ­culo",
+                        "descripcion": "DescripciÃ³n",
                         "stock_total_polo": "Stock total Polo",
-                        "codigo_normalizado": "Código normalizado",
+                        "codigo_normalizado": "CÃ³digo normalizado",
                     }
                 )
             )
 
     anterior = pd.DataFrame(columns=columnas)
     if stock_polo_anterior is not None and not stock_polo_anterior.empty:
-        art_col = extraer_columna(stock_polo_anterior, ["Artículo", "Articulo"])
-        desc_col = extraer_columna(stock_polo_anterior, ["Descripción", "Descripcion"])
-        stock_col = extraer_columna(stock_polo_anterior, ["Stock total Polo", "Stock Polo Logístico", "Stock Polo", "Cantidad"])
-        norm_col = extraer_columna(stock_polo_anterior, ["Código normalizado", "Codigo normalizado"])
+        art_col = extraer_columna(stock_polo_anterior, ["ArtÃ­culo", "Articulo"])
+        desc_col = extraer_columna(stock_polo_anterior, ["DescripciÃ³n", "Descripcion"])
+        stock_col = extraer_columna(stock_polo_anterior, ["Stock total Polo", "Stock Polo LogÃ­stico", "Stock Polo", "Cantidad"])
+        norm_col = extraer_columna(stock_polo_anterior, ["CÃ³digo normalizado", "Codigo normalizado"])
 
         if art_col and stock_col:
             anterior = pd.DataFrame(
                 {
-                    "Artículo": stock_polo_anterior[art_col].astype(str).str.strip(),
-                    "Descripción": stock_polo_anterior[desc_col].astype(str).str.strip() if desc_col else "",
+                    "ArtÃ­culo": stock_polo_anterior[art_col].astype(str).str.strip(),
+                    "DescripciÃ³n": stock_polo_anterior[desc_col].astype(str).str.strip() if desc_col else "",
                     "Stock total Polo": pd.to_numeric(stock_polo_anterior[stock_col], errors="coerce").fillna(0),
-                    "Código normalizado": stock_polo_anterior[norm_col].astype(str).str.strip()
+                    "CÃ³digo normalizado": stock_polo_anterior[norm_col].astype(str).str.strip()
                     if norm_col
                     else stock_polo_anterior[art_col].map(normalizar_codigo),
                 }
@@ -1745,31 +1852,31 @@ def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFr
 
     combinado["Stock total Polo"] = pd.to_numeric(combinado["Stock total Polo"], errors="coerce").fillna(0)
     res = (
-        combinado.groupby("Código normalizado", as_index=False)
+        combinado.groupby("CÃ³digo normalizado", as_index=False)
         .agg(
             **{
-                "Artículo": ("Artículo", _primer_valor_no_vacio),
-                "Descripción": ("Descripción", _primer_valor_no_vacio),
+                "ArtÃ­culo": ("ArtÃ­culo", _primer_valor_no_vacio),
+                "DescripciÃ³n": ("DescripciÃ³n", _primer_valor_no_vacio),
                 "Stock total Polo": ("Stock total Polo", "sum"),
             }
         )
     )
     res["Stock total Polo"] = res["Stock total Polo"].apply(formatear_numero)
-    return res[["Artículo", "Descripción", "Stock total Polo", "Código normalizado"]]
+    return res[["ArtÃ­culo", "DescripciÃ³n", "Stock total Polo", "CÃ³digo normalizado"]]
 
 
 def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.DataFrame) -> pd.DataFrame:
     columnas = [
         "Fecha/Hora",
-        "Depósito origen",
-        "Depósito destino",
+        "DepÃ³sito origen",
+        "DepÃ³sito destino",
         "Pallet",
         "Cantidad de cajas",
-        "Ubicación",
-        "Artículo",
-        "Descripción",
+        "UbicaciÃ³n",
+        "ArtÃ­culo",
+        "DescripciÃ³n",
         "Piezas",
-        "Código normalizado",
+        "CÃ³digo normalizado",
         "Observaciones",
     ]
     detalle = preparar_detalle_mudanza(df_pick)
@@ -1777,15 +1884,15 @@ def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.D
         detalle = detalle[
             [
                 "Fecha/Hora",
-                "Depósito origen",
-                "Depósito destino",
+                "DepÃ³sito origen",
+                "DepÃ³sito destino",
                 "Pallet",
                 "Cantidad de cajas",
-                "Ubicación",
-                "Artículo",
-                "Descripción",
+                "UbicaciÃ³n",
+                "ArtÃ­culo",
+                "DescripciÃ³n",
                 "Piezas enviadas",
-                "Código normalizado",
+                "CÃ³digo normalizado",
                 "Observaciones",
             ]
         ].rename(columns={"Piezas enviadas": "Piezas"})
@@ -1814,12 +1921,12 @@ def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.D
 
     texto_cols = [
         "Fecha/Hora",
-        "Depósito origen",
-        "Depósito destino",
-        "Ubicación",
-        "Artículo",
-        "Descripción",
-        "Código normalizado",
+        "DepÃ³sito origen",
+        "DepÃ³sito destino",
+        "UbicaciÃ³n",
+        "ArtÃ­culo",
+        "DescripciÃ³n",
+        "CÃ³digo normalizado",
         "Observaciones",
     ]
     for col in texto_cols:
@@ -1829,19 +1936,19 @@ def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.D
     combinado["Cantidad de cajas"] = pd.to_numeric(combinado["Cantidad de cajas"], errors="coerce").fillna(0).astype(int)
     combinado["Piezas"] = pd.to_numeric(combinado["Piezas"], errors="coerce").fillna(0)
 
-    ubicacion_upper = combinado["Ubicación"].astype(str).str.strip().str.upper()
+    ubicacion_upper = combinado["UbicaciÃ³n"].astype(str).str.strip().str.upper()
     combinado["_ubicacion_real"] = (~ubicacion_upper.isin(["", "PENDIENTE", "NAN"])).astype(int)
     combinado["_fuente_actual"] = pd.to_numeric(combinado["_fuente_actual"], errors="coerce").fillna(0).astype(int)
     combinado["_orden_original"] = range(len(combinado))
 
     claves_linea = [
         "Fecha/Hora",
-        "Depósito origen",
-        "Depósito destino",
+        "DepÃ³sito origen",
+        "DepÃ³sito destino",
         "Pallet",
         "Cantidad de cajas",
-        "Artículo",
-        "Descripción",
+        "ArtÃ­culo",
+        "DescripciÃ³n",
         "Piezas",
         "Observaciones",
     ]
@@ -1851,7 +1958,7 @@ def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.D
     combinado = (
         combinado.sort_values(["_fuente_actual", "_ubicacion_real", "_orden_original"], ascending=[False, False, False])
         .drop_duplicates(claves_unicas, keep="first")
-        .sort_values(["Pallet", "Cantidad de cajas", "Fecha/Hora", "Artículo", "_orden_original"])
+        .sort_values(["Pallet", "Cantidad de cajas", "Fecha/Hora", "ArtÃ­culo", "_orden_original"])
         .drop(columns=["_fuente_actual", "_ubicacion_real", "_orden_original", "_ocurrencia"], errors="ignore")
         .reset_index(drop=True)
     )
@@ -1877,7 +1984,7 @@ def historial_mudanzas(df_pick: pd.DataFrame, historial_anterior: pd.DataFrame) 
         return actual
 
     combinado = pd.concat(partes_historial, ignore_index=True)
-    ubic_col = extraer_columna(combinado, ["Ubicación", "Ubicacion"])
+    ubic_col = extraer_columna(combinado, ["UbicaciÃ³n", "Ubicacion"])
     if not ubic_col:
         return combinado.drop(columns=["_fuente_actual"], errors="ignore")
 
@@ -1890,13 +1997,13 @@ def historial_mudanzas(df_pick: pd.DataFrame, historial_anterior: pd.DataFrame) 
         "_ubicacion_real",
         "_orden_original",
         ubic_col,
-        extraer_columna(combinado, ["Código normalizado", "Codigo normalizado"]),
+        extraer_columna(combinado, ["CÃ³digo normalizado", "Codigo normalizado"]),
         extraer_columna(combinado, ["Stock restante Darkinel"]),
     }
     claves_linea = [c for c in combinado.columns if c not in excluir_clave and not str(c).startswith("_")]
     combinado["_ocurrencia"] = combinado.groupby(claves_linea + ["_fuente_actual"], dropna=False).cumcount()
     claves_unicas = claves_linea + ["_ocurrencia"]
-    orden_cols = [c for c in ["Pallet", "Caja", "Fecha/Hora", "Artículo", "_orden_original"] if c in combinado.columns]
+    orden_cols = [c for c in ["Pallet", "Caja", "Fecha/Hora", "ArtÃ­culo", "_orden_original"] if c in combinado.columns]
 
     return (
         combinado.sort_values(["_fuente_actual", "_ubicacion_real", "_orden_original"], ascending=[False, False, False])
@@ -1911,20 +2018,20 @@ def preparar_recepcion_polo(df_pick: pd.DataFrame) -> pd.DataFrame:
     if df_pick.empty:
         return pd.DataFrame(
             columns=[
-                "Fecha recepción",
+                "Fecha recepciÃ³n",
                 "Receptor",
-                "OK recepción",
+                "OK recepciÃ³n",
                 "Pallet",
                 "Caja",
-                "Ubicación informada",
-                "Artículo",
-                "Descripción",
+                "UbicaciÃ³n informada",
+                "ArtÃ­culo",
+                "DescripciÃ³n",
                 "Unidad",
                 "Piezas enviadas",
                 "Piezas recibidas",
                 "Diferencia",
-                "Código normalizado",
-                "Observaciones recepción",
+                "CÃ³digo normalizado",
+                "Observaciones recepciÃ³n",
             ]
         )
 
@@ -1950,20 +2057,20 @@ def preparar_recepcion_polo(df_pick: pd.DataFrame) -> pd.DataFrame:
         ]
     ].rename(
         columns={
-            "fecha_recepcion": "Fecha recepción",
+            "fecha_recepcion": "Fecha recepciÃ³n",
             "receptor": "Receptor",
-            "recepcion_ok": "OK recepción",
+            "recepcion_ok": "OK recepciÃ³n",
             "pallet": "Pallet",
             "bulto": "Caja",
-            "ubicacion_recepcion": "Ubicación informada",
-            "articulo": "Artículo",
-            "descripcion": "Descripción",
+            "ubicacion_recepcion": "UbicaciÃ³n informada",
+            "articulo": "ArtÃ­culo",
+            "descripcion": "DescripciÃ³n",
             "unidad": "Unidad",
             "cantidad_mudada": "Piezas enviadas",
             "cantidad_recibida": "Piezas recibidas",
             "diferencia": "Diferencia",
-            "codigo_normalizado": "Código normalizado",
-            "observaciones_recepcion": "Observaciones recepción",
+            "codigo_normalizado": "CÃ³digo normalizado",
+            "observaciones_recepcion": "Observaciones recepciÃ³n",
         }
     )
 
@@ -1974,25 +2081,27 @@ def generar_excel_control(
     stock_polo_anterior: pd.DataFrame,
     ubicaciones_anteriores: pd.DataFrame,
     historial_anterior: pd.DataFrame,
+    salidas_polo: pd.DataFrame | None = None,
 ) -> bytes:
     darkinel = stock_darkinel_actualizado(stock_consolidado, df_pick)
-    polo = stock_polo_actualizado(df_pick, stock_polo_anterior, ubicaciones_anteriores)
-    ubicacion = ubicacion_polo_logistico(df_pick, ubicaciones_anteriores)
+    polo = stock_polo_actualizado(df_pick, stock_polo_anterior, ubicaciones_anteriores, salidas_polo)
+    ubicacion = aplicar_salidas_a_ubicaciones(ubicacion_polo_logistico(df_pick, ubicaciones_anteriores), salidas_polo)
     historial = historial_mudanzas(df_pick, historial_anterior)
     resumen = resumen_pallets(df_pick)
     detalle = preparar_detalle_mudanza(df_pick)
     recepcion = preparar_recepcion_polo(df_pick)
+    salidas_export = mostrar_salidas_polo(salidas_polo_df() if salidas_polo is None else salidas_polo)
 
     resumen_depositos = pd.DataFrame(
         [
             {
-                "Depósito": "DARKINEL",
-                "Cantidad de códigos": int((pd.to_numeric(darkinel["Stock restante Darkinel"], errors="coerce").fillna(0) > 0).sum()) if not darkinel.empty else 0,
+                "DepÃ³sito": "DARKINEL",
+                "Cantidad de cÃ³digos": int((pd.to_numeric(darkinel["Stock restante Darkinel"], errors="coerce").fillna(0) > 0).sum()) if not darkinel.empty else 0,
                 "Piezas totales": formatear_numero(pd.to_numeric(darkinel["Stock restante Darkinel"], errors="coerce").fillna(0).sum()) if not darkinel.empty else 0,
             },
             {
-                "Depósito": "POLO LOGISTICO",
-                "Cantidad de códigos": int((pd.to_numeric(polo["Stock total Polo"], errors="coerce").fillna(0) > 0).sum()) if not polo.empty else 0,
+                "DepÃ³sito": "POLO LOGISTICO",
+                "Cantidad de cÃ³digos": int((pd.to_numeric(polo["Stock total Polo"], errors="coerce").fillna(0) > 0).sum()) if not polo.empty else 0,
                 "Piezas totales": formatear_numero(pd.to_numeric(polo["Stock total Polo"], errors="coerce").fillna(0).sum()) if not polo.empty else 0,
             },
         ]
@@ -2004,6 +2113,7 @@ def generar_excel_control(
         polo.to_excel(writer, index=False, sheet_name="STOCK_POLO_LOGISTICO")
         ubicacion.to_excel(writer, index=False, sheet_name="UBICACION_POLO_LOGISTICO")
         historial.to_excel(writer, index=False, sheet_name="HISTORIAL_MUDANZAS")
+        salidas_export.to_excel(writer, index=False, sheet_name="SALIDAS_POLO")
         recepcion.to_excel(writer, index=False, sheet_name="RECEPCION_POLO")
         resumen.to_excel(writer, index=False, sheet_name="COMPOSICION_PALLETS")
         detalle.to_excel(writer, index=False, sheet_name="DETALLE_MUDANZA")
@@ -2353,9 +2463,9 @@ def limpiar_mudanza_actual() -> None:
 # -----------------------------
 inicializar_estado()
 
-st.title("🔎 Lector de códigos + Mudanza Darkinel → Polo Logístico")
+st.title("ðŸ”Ž Lector de cÃ³digos + Mudanza Darkinel â†’ Polo LogÃ­stico")
 st.caption(
-    "Busca códigos en la base, suma stock repetido, arma pallets, registra ubicación física y genera las bases actualizadas de DARKINEL y POLO LOGISTICO."
+    "Busca cÃ³digos en la base, suma stock repetido, arma pallets, registra ubicaciÃ³n fÃ­sica y genera las bases actualizadas de DARKINEL y POLO LOGISTICO."
 )
 
 with st.sidebar:
@@ -2365,7 +2475,7 @@ with st.sidebar:
     else:
         st.warning("Sin nube: guardado local SQLite")
         st.caption("Para compartir datos entre usuarios en Streamlit Cloud, configura Supabase en Secrets.")
-    uploaded = st.file_uploader("Subí el archivo de stock de DARKINEL", type=["xls", "xlsx", "xlsm", "csv"])
+    uploaded = st.file_uploader("SubÃ­ el archivo de stock de DARKINEL", type=["xls", "xlsx", "xlsm", "csv"])
 
     stock_guardado_sidebar = cargar_archivo_estado("stock_darkinel_actual")
     if stock_guardado_sidebar:
@@ -2382,9 +2492,9 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Frecuencia opcional")
     uploaded_frecuencia = st.file_uploader(
-        "Subí archivo de frecuencia / meses de venta",
+        "SubÃ­ archivo de frecuencia / meses de venta",
         type=["xls", "xlsx", "xlsm", "csv"],
-        help="Debe tener una columna de Artículo/Código y una columna Frecuencia/Categoría o Meses.",
+        help="Debe tener una columna de ArtÃ­culo/CÃ³digo y una columna Frecuencia/CategorÃ­a o Meses.",
     )
 
     frecuencia_guardada_sidebar = cargar_archivo_estado("frecuencia_ventas_actual")
@@ -2407,9 +2517,9 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Base Polo anterior opcional")
     uploaded_polo = st.file_uploader(
-        "Subí el último control generado para seguir actualizando el POLO",
+        "SubÃ­ el Ãºltimo control generado para seguir actualizando el POLO",
         type=["xls", "xlsx", "xlsm"],
-        help="Opcional. Si lo subís, la app suma esta mudanza al stock y ubicaciones ya existentes del Polo Logístico.",
+        help="Opcional. Si lo subÃ­s, la app suma esta mudanza al stock y ubicaciones ya existentes del Polo LogÃ­stico.",
     )
 
     st.markdown("---")
@@ -2431,19 +2541,19 @@ with st.sidebar:
         st.rerun()
 
     st.subheader("Datos de mudanza")
-    deposito_origen = st.text_input("Depósito origen", value="DARKINEL")
-    deposito_destino = st.text_input("Depósito destino", value="POLO LOGISTICO")
+    deposito_origen = st.text_input("DepÃ³sito origen", value="DARKINEL")
+    deposito_destino = st.text_input("DepÃ³sito destino", value="POLO LOGISTICO")
     pallet_activo = st.number_input("Pallet activo", min_value=1, value=1, step=1)
     cantidad_bultos_activo = st.number_input("Cantidad de cajas del pallet", min_value=1, value=1, step=1)
     bulto_activo = st.number_input("Caja activa", min_value=1, max_value=int(cantidad_bultos_activo), value=1, step=1)
     ubicacion_default = st.text_input(
-        "Ubicación base opcional",
+        "UbicaciÃ³n base opcional",
         value="",
-        help="Podés dejarla vacía al cargar la mudanza y completarla cuando llegue al Polo. Ejemplo final: 1-L-3",
+        help="PodÃ©s dejarla vacÃ­a al cargar la mudanza y completarla cuando llegue al Polo. Ejemplo final: 1-L-3",
     )
 
     st.markdown("---")
-    if st.button("🧹 Vaciar mudanza actual", type="secondary"):
+    if st.button("ðŸ§¹ Vaciar mudanza actual", type="secondary"):
         limpiar_mudanza_actual()
         st.success("Mudanza actual vaciada.")
         st.rerun()
@@ -2470,23 +2580,23 @@ elif stock_guardado:
     stock_filename = stock_guardado.get("nombre", "stock_guardado.xlsx")
     st.info(f"Usando stock guardado en la base: {stock_filename}")
 else:
-    st.info("Subí el Excel de stock de DARKINEL para empezar.")
+    st.info("SubÃ­ el Excel de stock de DARKINEL para empezar.")
     st.stop()
 
 try:
     stock_df = cargar_stock(stock_bytes, stock_filename)
 except ImportError as e:
-    st.error("No se pudo leer el archivo .xls porque falta la librería xlrd.")
+    st.error("No se pudo leer el archivo .xls porque falta la librerÃ­a xlrd.")
     st.code("xlrd>=2.0.1", language="text")
     st.exception(e)
     st.stop()
 except Exception as e:
-    st.error("No se pudo leer el archivo de stock. Revisá que sea .xls, .xlsx o .csv válido.")
+    st.error("No se pudo leer el archivo de stock. RevisÃ¡ que sea .xls, .xlsx o .csv vÃ¡lido.")
     st.exception(e)
     st.stop()
 
 if stock_df.empty:
-    st.error("No encontré artículos con cantidad mayor a cero en el archivo.")
+    st.error("No encontrÃ© artÃ­culos con cantidad mayor a cero en el archivo.")
     st.stop()
 
 stock_consolidado = consolidar_por_codigo(stock_df)
@@ -2498,9 +2608,9 @@ if uploaded_frecuencia is not None:
         guardar_archivo_si_cambio("frecuencia_ventas_actual", frecuencia_filename, frecuencia_bytes)
         frecuencias_df = leer_frecuencias(frecuencia_bytes, frecuencia_filename)
         if frecuencias_df.empty:
-            st.sidebar.warning("No pude leer códigos/frecuencia del archivo de frecuencia.")
+            st.sidebar.warning("No pude leer cÃ³digos/frecuencia del archivo de frecuencia.")
         else:
-            st.sidebar.success(f"Frecuencias cargadas: {len(frecuencias_df)} códigos")
+            st.sidebar.success(f"Frecuencias cargadas: {len(frecuencias_df)} cÃ³digos")
     except Exception as e:
         frecuencias_df = pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
         st.sidebar.error("No pude leer el archivo de frecuencia.")
@@ -2540,9 +2650,10 @@ df_operativo = df_pick if not df_pick.empty else df_reimpresion
 usando_control_anterior = df_pick.empty and not df_reimpresion.empty
 mudanza_activa_es_control_anterior = misma_mudanza(df_pick, df_reimpresion)
 ubicaciones_operativas = pd.DataFrame() if usando_control_anterior or mudanza_activa_es_control_anterior else ubicaciones_anteriores
+salidas_polo_actual = salidas_polo_df()
 
 if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not df_reimpresion.empty:
-    st.info(f"El control anterior cargado trae {len(df_reimpresion)} línea(s) de mudanza.")
+    st.info(f"El control anterior cargado trae {len(df_reimpresion)} lÃ­nea(s) de mudanza.")
     if df_pick.empty:
         if st.button("Usar control anterior como mudanza activa", type="primary"):
             st.session_state.pick_items = df_reimpresion.to_dict("records")
@@ -2559,46 +2670,46 @@ if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not
             st.rerun()
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Códigos con stock", f"{len(stock_consolidado):,}".replace(",", "."))
+col1.metric("CÃ³digos con stock", f"{len(stock_consolidado):,}".replace(",", "."))
 col2.metric("Stock total DARKINEL", f"{int(pd.to_numeric(stock_consolidado['cantidad'], errors='coerce').fillna(0).sum()):,}".replace(",", "."))
-col3.metric("Líneas en mudanza", len(df_operativo))
+col3.metric("LÃ­neas en mudanza", len(df_operativo))
 col4.metric("Piezas a mudar", f"{int(pd.to_numeric(df_operativo.get('cantidad_mudada', pd.Series(dtype=float)), errors='coerce').fillna(0).sum()):,}".replace(",", "."))
 
 st.markdown("---")
 
-tab_buscar, tab_pallets, tab_recepcion, tab_bases, tab_stock = st.tabs(
-    ["1) Buscar y pickear", "2) Pallets / mudanza", "3) Recepción Polo", "4) Bases actualizadas", "5) Consulta stock"]
+tab_buscar, tab_pallets, tab_recepcion, tab_salidas, tab_bases, tab_stock = st.tabs(
+    ["1) Buscar y pickear", "2) Pallets / mudanza", "3) Recepcion Polo", "4) Salidas Polo", "5) Bases actualizadas", "6) Consulta stock"]
 )
 
 with tab_buscar:
-    modo = st.radio("Modo de búsqueda", ["Un código", "Varios códigos"], horizontal=True)
+    modo = st.radio("Modo de bÃºsqueda", ["Un cÃ³digo", "Varios cÃ³digos"], horizontal=True)
 
-    if modo == "Un código":
-        codigo = st.text_input("Escaneá o digitá el código", placeholder="Ejemplo: B6Y114302A J")
+    if modo == "Un cÃ³digo":
+        codigo = st.text_input("EscaneÃ¡ o digitÃ¡ el cÃ³digo", placeholder="Ejemplo: B6Y114302A J")
 
         if codigo:
             exactos, info = buscar_exactos(stock_consolidado, codigo)
 
-            with st.expander("Ver cómo interpretó el código", expanded=False):
+            with st.expander("Ver cÃ³mo interpretÃ³ el cÃ³digo", expanded=False):
                 st.write("**Lectura original:**", info["lectura_original"])
                 st.write("**Tokens limpios:**", info["tokens_limpios"])
                 st.write("**Sufijos detectados:**", info["sufijos"])
-                st.write("**Candidatos de búsqueda:**", info["candidatos"])
+                st.write("**Candidatos de bÃºsqueda:**", info["candidatos"])
 
             if not exactos.empty:
-                st.success(f"Encontré {len(exactos)} artículo(s) con stock consolidado.")
+                st.success(f"EncontrÃ© {len(exactos)} artÃ­culo(s) con stock consolidado.")
                 st.dataframe(preparar_resultado_para_mostrar(exactos), use_container_width=True, hide_index=True)
                 permitir_agregar_desde_base = True
                 sugerencias = pd.DataFrame()
             else:
-                st.warning("No encontré coincidencia exacta con stock. Te muestro sugerencias posibles.")
+                st.warning("No encontrÃ© coincidencia exacta con stock. Te muestro sugerencias posibles.")
                 sugerencias = buscar_sugerencias(stock_consolidado, info["candidatos"])
                 if sugerencias.empty:
                     st.info("No hay sugerencias para esa lectura.")
                 else:
                     st.dataframe(preparar_resultado_para_mostrar(sugerencias), use_container_width=True, hide_index=True)
                 permitir_agregar_desde_base = False
-                st.info("Elegí una sugerencia si corresponde al artículo leído. Si ninguna sirve, cargalo como artículo nuevo/manual.")
+                st.info("ElegÃ­ una sugerencia si corresponde al artÃ­culo leÃ­do. Si ninguna sirve, cargalo como artÃ­culo nuevo/manual.")
 
             if permitir_agregar_desde_base and not exactos.empty:
                 formulario_agregar_desde_base(
@@ -2685,8 +2796,8 @@ with tab_buscar:
                             st.error(msg)
 
     else:
-        codigos_texto = st.text_area("Pegá varios códigos, uno por línea", height=160)
-        st.caption("En este modo la app busca y muestra el primer match de cada línea. Para registrar ubicación exacta, conviene agregar de a un código.")
+        codigos_texto = st.text_area("PegÃ¡ varios cÃ³digos, uno por lÃ­nea", height=160)
+        st.caption("En este modo la app busca y muestra el primer match de cada lÃ­nea. Para registrar ubicaciÃ³n exacta, conviene agregar de a un cÃ³digo.")
         col_buscar_varios, col_agregar_varios = st.columns([1, 2])
         buscar_varios = col_buscar_varios.button("Buscar varios")
         agregar_varios = col_agregar_varios.button("Buscar y agregar a mudanza", type="primary")
@@ -2702,15 +2813,15 @@ with tab_buscar:
                 if exactos.empty:
                     sugerencias = buscar_sugerencias(stock_consolidado, info["candidatos"], limite=1)
                     if sugerencias.empty:
-                        filas.append({"Lectura": linea, "Resultado": "Sin exacto - cargar manual", "Artículo": linea.strip().upper(), "Descripción": "", "Stock total": ""})
+                        filas.append({"Lectura": linea, "Resultado": "Sin exacto - cargar manual", "ArtÃ­culo": linea.strip().upper(), "DescripciÃ³n": "", "Stock total": ""})
                     else:
                         row_sug = sugerencias.iloc[0]
                         filas.append(
                             {
                                 "Lectura": linea,
                                 "Resultado": "Sugerencia no agregada",
-                                "Artículo": row_sug.get("articulo", ""),
-                                "Descripción": row_sug.get("descripcion", ""),
+                                "ArtÃ­culo": row_sug.get("articulo", ""),
+                                "DescripciÃ³n": row_sug.get("descripcion", ""),
                                 "Stock total": row_sug.get("cantidad", ""),
                             }
                         )
@@ -2719,15 +2830,15 @@ with tab_buscar:
                     base = exactos
                     tipo = "Exacto"
                 if base.empty:
-                    filas.append({"Lectura": linea, "Resultado": "Sin stock encontrado", "Artículo": "", "Descripción": "", "Stock total": ""})
+                    filas.append({"Lectura": linea, "Resultado": "Sin stock encontrado", "ArtÃ­culo": "", "DescripciÃ³n": "", "Stock total": ""})
                 else:
                     row = base.iloc[0]
                     filas.append(
                         {
                             "Lectura": linea,
                             "Resultado": tipo,
-                            "Artículo": row.get("articulo", ""),
-                            "Descripción": row.get("descripcion", ""),
+                            "ArtÃ­culo": row.get("articulo", ""),
+                            "DescripciÃ³n": row.get("descripcion", ""),
                             "Stock total": row.get("cantidad", ""),
                         }
                     )
@@ -2763,7 +2874,7 @@ with tab_buscar:
                     st.rerun()
 
 with tab_pallets:
-    st.subheader("Composición por pallet")
+    st.subheader("ComposiciÃ³n por pallet")
     st.dataframe(resumen_pallets(df_operativo), use_container_width=True, hide_index=True)
 
     st.subheader("Detalle de mudanza")
@@ -2798,21 +2909,21 @@ with tab_pallets:
             columns={
                 "item_id": "ID",
                 "fecha_hora": "Fecha/Hora",
-                "deposito_origen": "Depósito origen",
-                "deposito_destino": "Depósito destino",
+                "deposito_origen": "DepÃ³sito origen",
+                "deposito_destino": "DepÃ³sito destino",
                 "pallet": "Pallet",
                 "cantidad_bultos": "Cantidad de cajas",
                 "bulto": "Caja",
                 "piezas_en_caja": "Piezas en esta caja",
-                "ubicacion": "Ubicación",
+                "ubicacion": "UbicaciÃ³n",
                 "lectura_scanner": "Lectura scanner",
-                "articulo": "Artículo",
-                "descripcion": "Descripción",
+                "articulo": "ArtÃ­culo",
+                "descripcion": "DescripciÃ³n",
                 "unidad": "Unidad",
                 "cantidad_mudada": "Piezas enviadas",
                 "stock_total": "Stock original Darkinel",
                 "stock_restante_darkinel": "Stock restante Darkinel",
-                "codigo_normalizado": "Código normalizado",
+                "codigo_normalizado": "CÃ³digo normalizado",
                 "observaciones": "Observaciones",
             }
         )
@@ -2832,28 +2943,28 @@ with tab_pallets:
                 if not item:
                     continue
                 item["fecha_hora"] = str(row.get("Fecha/Hora", "")).strip()
-                item["deposito_origen"] = str(row.get("Depósito origen", "")).strip() or "DARKINEL"
-                item["deposito_destino"] = str(row.get("Depósito destino", "")).strip() or "POLO LOGISTICO"
+                item["deposito_origen"] = str(row.get("DepÃ³sito origen", "")).strip() or "DARKINEL"
+                item["deposito_destino"] = str(row.get("DepÃ³sito destino", "")).strip() or "POLO LOGISTICO"
                 item["pallet"] = entero_seguro(row.get("Pallet", 1), 1)
                 item["cantidad_bultos"] = entero_seguro(row.get("Cantidad de cajas", row.get("Cantidad de bultos", 1)), 1)
                 item["bulto"] = max(1, min(entero_seguro(row.get("Caja", row.get("Bulto", 1)), 1), int(item["cantidad_bultos"])))
                 piezas_enviadas = row.get("Piezas en esta caja", row.get("Piezas enviadas", row.get("Cantidad mudada", 0)))
                 item["cantidades_bulto"] = normalizar_cantidades_por_bulto(f"Caja {item['bulto']} = Cantidad {piezas_enviadas}", piezas_enviadas, item["bulto"])
                 item["bultos_item"] = bultos_desde_distribucion(item["cantidades_bulto"], piezas_enviadas, item["bulto"])
-                item["ubicacion"] = str(row.get("Ubicación", "")).strip().upper() or "PENDIENTE"
+                item["ubicacion"] = str(row.get("UbicaciÃ³n", "")).strip().upper() or "PENDIENTE"
                 item["lectura_scanner"] = str(row.get("Lectura scanner", "")).strip()
-                item["articulo"] = str(row.get("Artículo", "")).strip()
-                item["descripcion"] = str(row.get("Descripción", "")).strip()
+                item["articulo"] = str(row.get("ArtÃ­culo", "")).strip()
+                item["descripcion"] = str(row.get("DescripciÃ³n", "")).strip()
                 item["unidad"] = str(row.get("Unidad", "")).strip()
                 item["cantidad_mudada"] = suma_cantidades_bulto(item["cantidades_bulto"], piezas_enviadas, item["bulto"]) or numero_seguro(piezas_enviadas, 0)
-                item["codigo_normalizado"] = str(row.get("Código normalizado", "")).strip() or normalizar_codigo(item["articulo"])
+                item["codigo_normalizado"] = str(row.get("CÃ³digo normalizado", "")).strip() or normalizar_codigo(item["articulo"])
                 item["observaciones"] = str(row.get("Observaciones", "")).strip()
             guardar_mudanza_actual_db()
             st.success("Detalle actualizado.")
             st.rerun()
 
     if not df_operativo.empty:
-        excel_bytes = generar_excel_control(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_operativas, historial_anterior)
+        excel_bytes = generar_excel_control(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_operativas, historial_anterior, salidas_polo_actual)
         st.download_button(
             "Descargar control actualizado Excel",
             data=excel_bytes,
@@ -2906,7 +3017,7 @@ with tab_pallets:
                 type="primary",
             )
     else:
-        st.info("Todavía no hay artículos agregados a la mudanza.")
+        st.info("TodavÃ­a no hay artÃ­culos agregados a la mudanza.")
 
         if not df_reimpresion.empty:
             st.markdown("---")
@@ -2937,22 +3048,22 @@ with tab_pallets:
                 )
 
     st.markdown("---")
-    st.subheader("Completar ubicación al llegar al Polo")
+    st.subheader("Completar ubicaciÃ³n al llegar al Polo")
     if df_pick.empty:
         if usando_control_anterior:
             st.caption("El control anterior se muestra para consulta. Para completar ubicaciones, cargalo como mudanza activa.")
         else:
-            st.caption("No hay líneas pendientes para ubicar.")
+            st.caption("No hay lÃ­neas pendientes para ubicar.")
     else:
         opciones_ubicacion = [
             f"{r.item_id}) Pallet {r.pallet} | Caja {r.bulto} | {r.ubicacion} | {r.articulo} | Piezas {r.cantidad_mudada}"
             for r in df_pick.itertuples()
         ]
-        linea_ubicacion = st.selectbox("Línea a actualizar", opciones_ubicacion)
+        linea_ubicacion = st.selectbox("LÃ­nea a actualizar", opciones_ubicacion)
         id_ubicacion = int(linea_ubicacion.split(")", 1)[0])
         ubicacion_actual = str(df_pick.loc[df_pick["item_id"] == id_ubicacion, "ubicacion"].iloc[0])
-        nueva_ubicacion = st.text_input("Nueva ubicación en Polo", value="" if ubicacion_actual == "PENDIENTE" else ubicacion_actual, placeholder="Ej: 1-L-3")
-        if st.button("Guardar ubicación"):
+        nueva_ubicacion = st.text_input("Nueva ubicaciÃ³n en Polo", value="" if ubicacion_actual == "PENDIENTE" else ubicacion_actual, placeholder="Ej: 1-L-3")
+        if st.button("Guardar ubicaciÃ³n"):
             ok, msg = actualizar_ubicacion_item(id_ubicacion, nueva_ubicacion)
             if ok:
                 guardar_mudanza_actual_db()
@@ -2962,14 +3073,14 @@ with tab_pallets:
                 st.error(msg)
 
     st.markdown("---")
-    st.subheader("Corregir / quitar líneas")
+    st.subheader("Corregir / quitar lÃ­neas")
     if df_pick.empty:
-        st.caption("No hay líneas para corregir.")
+        st.caption("No hay lÃ­neas para corregir.")
     else:
         opciones_corregir = [f"{r.item_id}) Pallet {r.pallet} | Caja {r.bulto} | {r.ubicacion} | {r.articulo} | Piezas {r.cantidad_mudada}" for r in df_pick.itertuples()]
 
-        st.markdown("**Modificar línea**")
-        linea_cantidad = st.selectbox("Línea para modificar", opciones_corregir, key="linea_modificar_cantidad")
+        st.markdown("**Modificar lÃ­nea**")
+        linea_cantidad = st.selectbox("LÃ­nea para modificar", opciones_corregir, key="linea_modificar_cantidad")
         id_cantidad = int(linea_cantidad.split(")", 1)[0])
         fila_editar = df_pick.loc[df_pick["item_id"] == id_cantidad].iloc[0]
         cantidad_actual = float(pd.to_numeric(fila_editar["cantidad_mudada"], errors="coerce"))
@@ -2988,12 +3099,12 @@ with tab_pallets:
             nuevo_pallet = e2.number_input("Pallet", min_value=1, value=pallet_actual, step=1)
             nueva_cantidad_bultos = e3.number_input("Cantidad de cajas", min_value=1, value=cantidad_bultos_actual, step=1)
             nuevo_bulto = e4.number_input("Caja", min_value=1, max_value=int(nueva_cantidad_bultos), value=min(bulto_actual, int(nueva_cantidad_bultos)), step=1)
-            nueva_ubicacion_editar = e5.text_input("Ubicación", value="" if ubicacion_actual_editar == "PENDIENTE" else ubicacion_actual_editar)
+            nueva_ubicacion_editar = e5.text_input("UbicaciÃ³n", value="" if ubicacion_actual_editar == "PENDIENTE" else ubicacion_actual_editar)
 
             aplicar_stock_real = st.checkbox(
                 "Actualizar stock real que queda en Darkinel",
                 value=str(fila_editar.get("estado", "")).strip().upper() == "MANUAL",
-                help="Usalo si el Excel no tiene el stock real o si el artículo fue creado manualmente.",
+                help="Usalo si el Excel no tiene el stock real o si el artÃ­culo fue creado manualmente.",
             )
             stock_darkinel_restante = st.number_input(
                 "Cantidad que queda en Darkinel",
@@ -3002,7 +3113,7 @@ with tab_pallets:
                 step=1.0,
                 disabled=not aplicar_stock_real,
             )
-            guardar_linea = st.form_submit_button("Guardar cambios de línea", type="primary")
+            guardar_linea = st.form_submit_button("Guardar cambios de lÃ­nea", type="primary")
 
         if guardar_linea:
             ok, msg = actualizar_linea_item(
@@ -3023,24 +3134,24 @@ with tab_pallets:
             else:
                 st.error(msg)
 
-        st.markdown("**Quitar líneas**")
+        st.markdown("**Quitar lÃ­neas**")
         opciones_quitar = [f"{r.item_id}) Pallet {r.pallet} | Caja {r.bulto} | {r.ubicacion} | {r.articulo} | Piezas {r.cantidad_mudada}" for r in df_pick.itertuples()]
-        quitar = st.multiselect("Líneas para quitar", opciones_quitar)
-        if st.button("Quitar líneas seleccionadas") and quitar:
+        quitar = st.multiselect("LÃ­neas para quitar", opciones_quitar)
+        if st.button("Quitar lÃ­neas seleccionadas") and quitar:
             ids = {int(x.split(")", 1)[0]) for x in quitar}
             st.session_state.pick_items = [item for item in st.session_state.pick_items if int(item.get("item_id", 0)) not in ids]
             guardar_mudanza_actual_db()
-            st.success("Líneas quitadas.")
+            st.success("LÃ­neas quitadas.")
             st.rerun()
 
 with tab_recepcion:
-    st.subheader("Recepción en Polo")
+    st.subheader("RecepciÃ³n en Polo")
     if df_operativo.empty:
-        st.info("Todavía no hay artículos en la mudanza para recibir.")
+        st.info("TodavÃ­a no hay artÃ­culos en la mudanza para recibir.")
     else:
         if usando_control_anterior:
-            st.info("Mostrando recepción del control anterior cargado. Para guardar cambios, usalo como mudanza activa.")
-        st.caption("Seleccioná el pallet, informá una ubicación única y desmarcá solamente lo que tenga problema. Si hay algo desmarcado, ese pallet no se guarda.")
+            st.info("Mostrando recepciÃ³n del control anterior cargado. Para guardar cambios, usalo como mudanza activa.")
+        st.caption("SeleccionÃ¡ el pallet, informÃ¡ una ubicaciÃ³n Ãºnica y desmarcÃ¡ solamente lo que tenga problema. Si hay algo desmarcado, ese pallet no se guarda.")
         trabajo_recepcion = normalizar_df_pick(df_operativo)
         pallets_recepcion = sorted(pd.to_numeric(trabajo_recepcion["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
         pr1, pr2, pr3 = st.columns([1, 1.5, 1.5])
@@ -3056,7 +3167,7 @@ with tab_recepcion:
         )
         ubicaciones_reales = [u for u in ubicaciones_existentes.unique().tolist() if u and u not in ["PENDIENTE", "NAN"]]
         ubicacion_sugerida = ubicaciones_reales[0] if len(ubicaciones_reales) == 1 else ""
-        ubicacion_pallet = pr2.text_input("Ubicación única del pallet", value=ubicacion_sugerida, placeholder="Ej: 1-L-3")
+        ubicacion_pallet = pr2.text_input("UbicaciÃ³n Ãºnica del pallet", value=ubicacion_sugerida, placeholder="Ej: 1-L-3")
         receptor_pallet = pr3.text_input("Recibido por", placeholder="Nombre")
 
         recepcion_base = lineas_pallet_recepcion.copy()
@@ -3086,35 +3197,35 @@ with tab_recepcion:
                 "item_id": "ID",
                 "pallet": "Pallet",
                 "bulto": "Caja",
-                "articulo": "Artículo",
-                "descripcion": "Descripción",
+                "articulo": "ArtÃ­culo",
+                "descripcion": "DescripciÃ³n",
                 "unidad": "Unidad",
                 "cantidad_mudada": "Piezas enviadas",
                 "cantidad_recibida": "Piezas recibidas",
-                "recepcion_ok": "OK recepción",
-                "ubicacion_recepcion": "Ubicación Polo",
+                "recepcion_ok": "OK recepciÃ³n",
+                "ubicacion_recepcion": "UbicaciÃ³n Polo",
                 "receptor": "Recibido por",
-                "fecha_recepcion": "Fecha recepción",
-                "observaciones_recepcion": "Observaciones recepción",
+                "fecha_recepcion": "Fecha recepciÃ³n",
+                "observaciones_recepcion": "Observaciones recepciÃ³n",
             }
         )
-        recepcion_editor["OK recepción"] = True
+        recepcion_editor["OK recepciÃ³n"] = True
 
         recepcion_editada = st.data_editor(
             recepcion_editor,
             use_container_width=True,
             hide_index=True,
-            disabled=["ID", "Pallet", "Caja", "Artículo", "Descripción", "Unidad", "Piezas enviadas", "Ubicación Polo", "Recibido por", "Fecha recepción"],
+            disabled=["ID", "Pallet", "Caja", "ArtÃ­culo", "DescripciÃ³n", "Unidad", "Piezas enviadas", "UbicaciÃ³n Polo", "Recibido por", "Fecha recepciÃ³n"],
             num_rows="fixed",
             key="recepcion_polo_editor",
         )
 
-        if st.button("Guardar recepción del pallet", type="primary", disabled=usando_control_anterior):
+        if st.button("Guardar recepciÃ³n del pallet", type="primary", disabled=usando_control_anterior):
             if not str(ubicacion_pallet).strip():
-                st.error("Informá la ubicación del pallet antes de guardar.")
+                st.error("InformÃ¡ la ubicaciÃ³n del pallet antes de guardar.")
                 st.stop()
-            if not bool(recepcion_editada["OK recepción"].astype(bool).all()):
-                st.error("Hay líneas desmarcadas. Este pallet no se guarda hasta que todo esté OK.")
+            if not bool(recepcion_editada["OK recepciÃ³n"].astype(bool).all()):
+                st.error("Hay lÃ­neas desmarcadas. Este pallet no se guarda hasta que todo estÃ© OK.")
                 st.stop()
 
             por_id = {int(item.get("item_id", 0)): item for item in st.session_state.pick_items}
@@ -3131,19 +3242,81 @@ with tab_recepcion:
                 item["ubicacion"] = ubicacion_polo
                 item["receptor"] = str(receptor_pallet).strip()
                 item["fecha_recepcion"] = ahora_recepcion
-                item["observaciones_recepcion"] = str(row.get("Observaciones recepción", "")).strip()
+                item["observaciones_recepcion"] = str(row.get("Observaciones recepciÃ³n", "")).strip()
             guardar_mudanza_actual_db()
-            st.success(f"Pallet {pallet_recepcion} recibido OK y ubicación actualizada.")
+            st.success(f"Pallet {pallet_recepcion} recibido OK y ubicaciÃ³n actualizada.")
             st.rerun()
 
         recepcion_actual = preparar_recepcion_polo(df_operativo)
         if not recepcion_actual.empty:
-            pendientes = int((~recepcion_actual["OK recepción"].astype(bool)).sum())
+            pendientes = int((~recepcion_actual["OK recepciÃ³n"].astype(bool)).sum())
             diferencias = int((pd.to_numeric(recepcion_actual["Diferencia"], errors="coerce").fillna(0) != 0).sum())
             r1, r2, r3 = st.columns(3)
-            r1.metric("Líneas recibidas OK", len(recepcion_actual) - pendientes)
-            r2.metric("Líneas pendientes", pendientes)
+            r1.metric("LÃ­neas recibidas OK", len(recepcion_actual) - pendientes)
+            r2.metric("LÃ­neas pendientes", pendientes)
             r3.metric("Diferencias cantidad", diferencias)
+
+with tab_salidas:
+    st.subheader("Salidas / ventas desde Polo")
+    ubicaciones_disponibles = aplicar_salidas_a_ubicaciones(ubicacion_polo_logistico(df_operativo, ubicaciones_operativas), salidas_polo_actual)
+    if ubicaciones_disponibles.empty:
+        st.info("Todavia no hay stock con locacion en Polo para descontar.")
+    else:
+        codigo_salida = st.text_input("Codigo vendido / lectura scanner", placeholder="Ej: KCYB-50-22X", key="codigo_salida_polo")
+        opciones_salida = buscar_en_inventario(
+            inventario_para_buscar(pd.DataFrame(), df_operativo, ubicaciones_operativas, pd.DataFrame(), salidas_polo_actual),
+            codigo_salida,
+        ) if codigo_salida else pd.DataFrame()
+
+        if codigo_salida and opciones_salida.empty:
+            st.warning("No encontre ese codigo con stock disponible en Polo.")
+        elif not opciones_salida.empty:
+            opciones_polo = opciones_salida[opciones_salida["deposito"].eq("POLO LOGISTICO")].copy()
+            if opciones_polo.empty:
+                st.warning("El codigo existe, pero no tiene stock disponible en Polo.")
+            else:
+                opciones_polo = opciones_polo[opciones_polo["ubicacion"].apply(es_ubicacion_real)].copy()
+                opciones_polo["cantidad_num"] = pd.to_numeric(opciones_polo["cantidad"], errors="coerce").fillna(0)
+                opciones_polo = opciones_polo[opciones_polo["cantidad_num"] > 0].copy()
+                if opciones_polo.empty:
+                    st.warning("Ese codigo no tiene locacion real en Polo para descontar.")
+                else:
+                    opciones_txt = [
+                        f"{r.codigo_normalizado} | {r.articulo} | {r.descripcion} | Locacion {r.ubicacion} | Disponible {formatear_numero(r.cantidad_num)}"
+                        for r in opciones_polo.itertuples()
+                    ]
+                    seleccion = st.selectbox("Elegir locacion a descontar", opciones_txt, key="salida_locacion_select")
+                    idx_sel = opciones_txt.index(seleccion)
+                    fila_sel = opciones_polo.reset_index(drop=True).iloc[idx_sel]
+                    disponible = float(fila_sel["cantidad_num"])
+                    with st.form("form_salida_polo"):
+                        c1, c2, c3 = st.columns(3)
+                        cantidad_salida = c1.number_input("Cantidad a descontar", min_value=1.0, max_value=max(disponible, 1.0), value=1.0, step=1.0)
+                        responsable = c2.text_input("Responsable", placeholder="Nombre")
+                        observaciones = c3.text_input("Observaciones", placeholder="Venta / salida / ajuste")
+                        guardar_salida = st.form_submit_button("Descontar de esta locacion", type="primary")
+
+                    if guardar_salida:
+                        st.session_state.salida_seq = int(st.session_state.get("salida_seq", 0) or 0) + 1
+                        st.session_state.salidas_polo.append(
+                            {
+                                "salida_id": st.session_state.salida_seq,
+                                "fecha_hora": ahora_texto(),
+                                "codigo_normalizado": fila_sel["codigo_normalizado"],
+                                "articulo": fila_sel["articulo"],
+                                "descripcion": fila_sel["descripcion"],
+                                "ubicacion": fila_sel["ubicacion"],
+                                "cantidad": float(cantidad_salida),
+                                "responsable": responsable,
+                                "observaciones": observaciones,
+                            }
+                        )
+                        guardar_salidas_polo_db()
+                        st.success(f"Salida registrada. Se desconto {formatear_numero(cantidad_salida)} de {fila_sel['ubicacion']}.")
+                        st.rerun()
+
+    st.subheader("Historial de salidas Polo")
+    st.dataframe(mostrar_salidas_polo(salidas_polo_actual), use_container_width=True, hide_index=True)
 
 with tab_bases:
     st.subheader("STOCK_DARKINEL_ACTUALIZADO")
@@ -3151,25 +3324,28 @@ with tab_bases:
     st.dataframe(darkinel_actual, use_container_width=True, hide_index=True)
 
     st.subheader("STOCK_POLO_LOGISTICO")
-    polo_actual = stock_polo_actualizado(df_operativo, stock_polo_anterior, ubicaciones_operativas)
+    polo_actual = stock_polo_actualizado(df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
     st.dataframe(polo_actual, use_container_width=True, hide_index=True)
 
     st.subheader("UBICACION_POLO_LOGISTICO")
-    ubicacion_actual = ubicacion_polo_logistico(df_operativo, ubicaciones_operativas)
+    ubicacion_actual = aplicar_salidas_a_ubicaciones(ubicacion_polo_logistico(df_operativo, ubicaciones_operativas), salidas_polo_actual)
     st.dataframe(ubicacion_actual, use_container_width=True, hide_index=True)
 
+    st.subheader("SALIDAS_POLO")
+    st.dataframe(mostrar_salidas_polo(salidas_polo_actual), use_container_width=True, hide_index=True)
+
 with tab_stock:
-    st.subheader("Consulta de stock por código")
-    inventario_consulta = inventario_para_buscar(stock_consolidado, df_operativo, ubicaciones_operativas, frecuencias_df)
-    codigo_consulta = st.text_input("Código / lectura scanner", placeholder="Ej: KCYB-50-22X")
+    st.subheader("Consulta de stock por cÃ³digo")
+    inventario_consulta = inventario_para_buscar(stock_consolidado, df_operativo, ubicaciones_operativas, frecuencias_df, salidas_polo_actual)
+    codigo_consulta = st.text_input("CÃ³digo / lectura scanner", placeholder="Ej: KCYB-50-22X")
 
     if codigo_consulta:
         resultado_consulta = buscar_en_inventario(inventario_consulta, codigo_consulta)
         if resultado_consulta.empty:
-            st.warning("No encontré ese código en Darkinel ni en Polo.")
+            st.warning("No encontrÃ© ese cÃ³digo en Darkinel ni en Polo.")
         else:
             st.dataframe(mostrar_inventario(resultado_consulta), use_container_width=True, hide_index=True)
     else:
         st.dataframe(mostrar_inventario(inventario_consulta.head(100)), use_container_width=True, hide_index=True)
 
-    st.caption("Frecuencia: A = 0 a 6 meses, B = 6,1 a 12, C = 12,1 a 18, E = 18,1 a 24, F = 24,1 a 38, Scrap = más de 38 meses.")
+    st.caption("Frecuencia: A = 0 a 6 meses, B = 6,1 a 12, C = 12,1 a 18, E = 18,1 a 24, F = 24,1 a 38, Scrap = mÃ¡s de 38 meses.")
