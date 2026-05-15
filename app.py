@@ -1050,7 +1050,7 @@ def mostrar_inventario(df: pd.DataFrame) -> pd.DataFrame:
 
 def limpiar_columna_visible(columna) -> str:
     texto = str(columna)
-    if not any(marca in texto for marca in ["Ã", "Â", "â", "ƒ", "ð"]):
+    if not any(marca in texto for marca in ["\u00c3", "\u00c2", "\u00e2", "\u00c6", "\ufffd"]):
         return texto
     bajo = texto.lower()
     if "ok" in bajo and "recepci" in bajo:
@@ -1260,6 +1260,77 @@ def formulario_agregar_desde_base(
             validar_stock=False,
         )
         if ok:
+            guardar_mudanza_actual_db()
+            st.success(msg)
+            st.rerun()
+        else:
+            st.error(msg)
+
+
+def formulario_agregar_manual(
+    codigo: str,
+    titulo: str,
+    form_key: str,
+    pallet_activo: int,
+    cantidad_bultos_activo: int,
+    bulto_activo: int,
+    ubicacion_default: str,
+    deposito_origen: str,
+    deposito_destino: str,
+    pendientes_key: str | None = None,
+) -> None:
+    st.subheader(titulo)
+    st.caption("Usalo cuando el articulo no existe exacto en el Excel/base cargada. No descuenta stock de DARKINEL, pero si entra a la mudanza y al POLO.")
+    with st.form(form_key):
+        m1, m2, m3 = st.columns([1.2, 2, 0.8])
+        articulo_manual = m1.text_input("Articulo", value=str(codigo).strip().upper(), key=f"{form_key}_articulo")
+        descripcion_manual = m2.text_input("Descripcion", value="", key=f"{form_key}_descripcion")
+        unidad_manual = m3.text_input("Unidad", value="uni", key=f"{form_key}_unidad")
+
+        m4, m5, m6, m7, m8, m9 = st.columns(6)
+        cantidad_manual = m4.number_input("Piezas a mudar", min_value=1.0, value=1.0, step=1.0, key=f"{form_key}_cantidad")
+        stock_darkinel_manual = m5.number_input("Queda en Darkinel", min_value=0.0, value=0.0, step=1.0, key=f"{form_key}_stock_darkinel")
+        pallet_manual = m6.number_input("Pallet", min_value=1, value=int(pallet_activo), step=1, key=f"{form_key}_pallet")
+        cantidad_bultos_manual = m7.number_input("Cantidad de cajas", min_value=1, value=int(cantidad_bultos_activo), step=1, key=f"{form_key}_cajas")
+        bulto_manual = m8.number_input("Caja", min_value=1, max_value=int(cantidad_bultos_manual), value=min(int(bulto_activo), int(cantidad_bultos_manual)), step=1, key=f"{form_key}_bulto")
+        ubicacion_manual = m9.text_input("Ubicacion", value=str(ubicacion_default), placeholder="Pendiente / Ej: 1-L-3", key=f"{form_key}_ubicacion")
+        observaciones_manual = st.text_input("Observaciones manual", value="Articulo agregado manualmente", key=f"{form_key}_obs")
+        submit_manual = st.form_submit_button("Agregar manual a mudanza", type="primary")
+
+    if submit_manual:
+        articulo_manual = str(articulo_manual).strip().upper()
+        if not articulo_manual:
+            st.error("El articulo manual no puede quedar vacio.")
+            return
+        row_manual = pd.Series(
+            {
+                "articulo": articulo_manual,
+                "descripcion": str(descripcion_manual).strip() or "SIN DESCRIPCION",
+                "estado": "MANUAL",
+                "unidad": str(unidad_manual).strip() or "uni",
+                "cantidad": float(cantidad_manual) + float(stock_darkinel_manual),
+                "codigo_normalizado": normalizar_codigo(articulo_manual),
+            }
+        )
+        ok, msg = agregar_item_a_mudanza(
+            lectura_original=codigo,
+            row=row_manual,
+            cantidad_mudada=cantidad_manual,
+            pallet=pallet_manual,
+            cantidad_bultos=cantidad_bultos_manual,
+            bulto=bulto_manual,
+            bultos_item="",
+            cantidades_bulto=f"Caja {int(bulto_manual)} = Cantidad {formatear_numero(cantidad_manual)}",
+            ubicacion=ubicacion_manual,
+            deposito_origen=deposito_origen,
+            deposito_destino=deposito_destino,
+            observaciones=observaciones_manual,
+            validar_stock=False,
+        )
+        if ok:
+            if pendientes_key:
+                pendientes = [x for x in st.session_state.get(pendientes_key, []) if str(x).strip() != str(codigo).strip()]
+                st.session_state[pendientes_key] = pendientes
             guardar_mudanza_actual_db()
             st.success(msg)
             st.rerun()
@@ -1908,6 +1979,15 @@ def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.D
     combinado["Pallet"] = pd.to_numeric(combinado["Pallet"], errors="coerce").fillna(0).astype(int)
     combinado["Cantidad de cajas"] = pd.to_numeric(combinado["Cantidad de cajas"], errors="coerce").fillna(0).astype(int)
     combinado["Piezas"] = pd.to_numeric(combinado["Piezas"], errors="coerce").fillna(0)
+    identidad_vacia = (
+        combinado["Articulo"].astype(str).str.strip().eq("")
+        & combinado["Descripcion"].astype(str).str.strip().eq("")
+        & combinado["Codigo normalizado"].astype(str).str.strip().eq("")
+    )
+    ubicacion_vacia = ~combinado["Ubicacion"].apply(es_ubicacion_real)
+    combinado = combinado.loc[~(identidad_vacia & ubicacion_vacia)].copy()
+    if combinado.empty:
+        return pd.DataFrame(columns=columnas)
     ubicacion_upper = combinado["Ubicacion"].astype(str).str.strip().str.upper()
     combinado["_ubicacion_real"] = (~ubicacion_upper.isin(["", "PENDIENTE", "NAN"])).astype(int)
     combinado["_fuente_actual"] = pd.to_numeric(combinado["_fuente_actual"], errors="coerce").fillna(0).astype(int)
@@ -2004,14 +2084,14 @@ def generar_excel_control(
     historial_anterior: pd.DataFrame,
     salidas_polo: pd.DataFrame | None = None,
 ) -> bytes:
-    darkinel = stock_darkinel_actualizado(stock_consolidado, df_pick)
-    polo = stock_polo_actualizado(df_pick, stock_polo_anterior, ubicaciones_anteriores, salidas_polo)
-    ubicacion = aplicar_salidas_a_ubicaciones(ubicacion_polo_logistico(df_pick, ubicaciones_anteriores), salidas_polo)
-    historial = historial_mudanzas(df_pick, historial_anterior)
-    resumen = resumen_pallets(df_pick)
-    detalle = preparar_detalle_mudanza(df_pick)
-    recepcion = preparar_recepcion_polo(df_pick)
-    salidas_export = mostrar_salidas_polo(salidas_polo_df() if salidas_polo is None else salidas_polo)
+    darkinel = limpiar_df_visible(stock_darkinel_actualizado(stock_consolidado, df_pick))
+    polo = limpiar_df_visible(stock_polo_actualizado(df_pick, stock_polo_anterior, ubicaciones_anteriores, salidas_polo))
+    ubicacion = limpiar_df_visible(aplicar_salidas_a_ubicaciones(ubicacion_polo_logistico(df_pick, ubicaciones_anteriores), salidas_polo))
+    historial = limpiar_df_visible(historial_mudanzas(df_pick, historial_anterior))
+    resumen = limpiar_df_visible(resumen_pallets(df_pick))
+    detalle = limpiar_df_visible(preparar_detalle_mudanza(df_pick))
+    recepcion = limpiar_df_visible(preparar_recepcion_polo(df_pick))
+    salidas_export = limpiar_df_visible(mostrar_salidas_polo(salidas_polo_df() if salidas_polo is None else salidas_polo))
 
     resumen_depositos = pd.DataFrame(
         [
@@ -2027,6 +2107,8 @@ def generar_excel_control(
             },
         ]
     )
+
+    resumen_depositos.columns = ["Deposito", "Cantidad de codigos", "Piezas totales"]
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -2048,8 +2130,8 @@ def generar_excel_control(
                 col_letter = col[0].column_letter
                 for cell in col:
                     val = "" if cell.value is None else str(cell.value)
-                    max_len = max(max_len, min(len(val), 70))
-                ws.column_dimensions[col_letter].width = max(max_len + 2, 12)
+                    max_len = max(max_len, min(len(val), 45))
+                ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 47)
 
     return output.getvalue()
 
@@ -2730,12 +2812,14 @@ with tab_buscar:
             filas = []
             agregados = 0
             errores = []
+            manual_pendientes = []
             for linea in codigos_texto.splitlines():
                 linea = linea.strip()
                 if not linea:
                     continue
                 exactos, info = buscar_exactos(stock_consolidado, linea)
                 if exactos.empty:
+                    manual_pendientes.append(linea)
                     sugerencias = buscar_sugerencias(stock_consolidado, info["candidatos"], limite=1)
                     if sugerencias.empty:
                         filas.append({"Lectura": linea, "Resultado": "Sin exacto - cargar manual", "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo": linea.strip().upper(), "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n": "", "Stock total": ""})
@@ -2788,6 +2872,7 @@ with tab_buscar:
                         else:
                             errores.append(f"{linea}: {msg}")
             st.dataframe(limpiar_df_visible(pd.DataFrame(filas)), use_container_width=True, hide_index=True)
+            st.session_state["lecturas_manual_pendientes"] = list(dict.fromkeys(manual_pendientes))
             if agregar_varios:
                 if agregados:
                     st.success(f"Agregue {agregados} articulo(s) a la mudanza.")
@@ -2797,6 +2882,25 @@ with tab_buscar:
                 if agregados:
                     guardar_mudanza_actual_db()
                     st.rerun()
+
+        lecturas_manual_pendientes = st.session_state.get("lecturas_manual_pendientes", [])
+        if lecturas_manual_pendientes:
+            st.markdown("---")
+            st.info("Estas lecturas no tuvieron coincidencia exacta. Podes cargar una como articulo nuevo/manual.")
+            lectura_manual_varios = st.selectbox("Lectura a cargar manualmente", lecturas_manual_pendientes, key="lectura_manual_varios")
+            form_key_manual_varios = f"form_manual_varios_{normalizar_codigo(lectura_manual_varios)[:24] or 'sin_codigo'}"
+            formulario_agregar_manual(
+                lectura_manual_varios,
+                "Agregar articulo manual",
+                form_key_manual_varios,
+                pallet_activo,
+                cantidad_bultos_activo,
+                bulto_activo,
+                ubicacion_default,
+                deposito_origen,
+                deposito_destino,
+                pendientes_key="lecturas_manual_pendientes",
+            )
 
 with tab_pallets:
     st.subheader("Composicion por pallet")
