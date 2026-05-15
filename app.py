@@ -3310,10 +3310,10 @@ with tab_pallets:
         linea_cantidad = st.selectbox("Linea para modificar", opciones_corregir, key="linea_modificar_cantidad")
         id_cantidad = int(linea_cantidad.split(")", 1)[0])
         fila_editar = df_pick.loc[df_pick["item_id"] == id_cantidad].iloc[0]
-        cantidad_actual = float(pd.to_numeric(fila_editar["cantidad_mudada"], errors="coerce"))
-        pallet_actual = int(pd.to_numeric(fila_editar["pallet"], errors="coerce"))
-        cantidad_bultos_actual = int(pd.to_numeric(fila_editar["cantidad_bultos"], errors="coerce"))
-        bulto_actual = int(pd.to_numeric(fila_editar["bulto"], errors="coerce"))
+        cantidad_actual = float(pd.to_numeric(fila_editar["cantidad_mudada"], errors="coerce") or 0)
+        pallet_actual = max(int(pd.to_numeric(fila_editar["pallet"], errors="coerce") or 1), 1)
+        cantidad_bultos_actual = max(int(pd.to_numeric(fila_editar["cantidad_bultos"], errors="coerce") or 1), 1)
+        bulto_actual = max(int(pd.to_numeric(fila_editar["bulto"], errors="coerce") or 1), 1)
         bultos_item_actual = str(fila_editar.get("bultos_item", bulto_actual))
         cantidades_bulto_actual = str(fila_editar.get("cantidades_bulto", f"{bulto_actual}={cantidad_actual}"))
         ubicacion_actual_editar = str(fila_editar["ubicacion"])
@@ -3322,7 +3322,7 @@ with tab_pallets:
 
         with st.form("form_modificar_linea"):
             e1, e2, e3, e4, e5 = st.columns(5)
-            nueva_cantidad = e1.number_input("Piezas a mudar", min_value=1.0, value=cantidad_actual, step=1.0)
+            nueva_cantidad = e1.number_input("Piezas a mudar", min_value=0.0, value=max(cantidad_actual, 0.0), step=1.0)
             nuevo_pallet = e2.number_input("Pallet", min_value=1, value=pallet_actual, step=1)
             nueva_cantidad_bultos = e3.number_input("Cantidad de cajas", min_value=1, value=cantidad_bultos_actual, step=1)
             nuevo_bulto = e4.number_input("Caja", min_value=1, max_value=int(nueva_cantidad_bultos), value=min(bulto_actual, int(nueva_cantidad_bultos)), step=1)
@@ -3343,23 +3343,26 @@ with tab_pallets:
             guardar_linea = st.form_submit_button("Guardar cambios de linea", type="primary")
 
         if guardar_linea:
-            ok, msg = actualizar_linea_item(
-                id_cantidad,
-                nueva_cantidad,
-                nuevo_pallet,
-                nueva_cantidad_bultos,
-                nuevo_bulto,
-                bultos_item_actual,
-                f"Caja {int(nuevo_bulto)} = Cantidad {formatear_numero(nueva_cantidad)}",
-                nueva_ubicacion_editar,
-                stock_darkinel_restante if aplicar_stock_real else None,
-            )
-            if ok:
-                guardar_mudanza_actual_db()
-                st.success(msg)
-                st.rerun()
+            if float(nueva_cantidad) <= 0:
+                st.error("Para guardar la linea, la cantidad a mudar tiene que ser mayor a cero.")
             else:
-                st.error(msg)
+                ok, msg = actualizar_linea_item(
+                    id_cantidad,
+                    nueva_cantidad,
+                    nuevo_pallet,
+                    nueva_cantidad_bultos,
+                    nuevo_bulto,
+                    bultos_item_actual,
+                    f"Caja {int(nuevo_bulto)} = Cantidad {formatear_numero(nueva_cantidad)}",
+                    nueva_ubicacion_editar,
+                    stock_darkinel_restante if aplicar_stock_real else None,
+                )
+                if ok:
+                    guardar_mudanza_actual_db()
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
 
         st.markdown("**Quitar lineas**")
         opciones_quitar = [f"{r.item_id}) Pallet {r.pallet} | Caja {r.bulto} | {r.ubicacion} | {r.articulo} | Piezas {r.cantidad_mudada}" for r in df_pick.itertuples()]
