@@ -1031,6 +1031,46 @@ def mostrar_inventario(df: pd.DataFrame) -> pd.DataFrame:
     )[columnas]
 
 
+def limpiar_columna_visible(columna) -> str:
+    texto = str(columna)
+    if not any(marca in texto for marca in ["Ã", "Â", "â", "ƒ", "ð"]):
+        return texto
+    bajo = texto.lower()
+    if "fecha" in bajo and "hora" in bajo:
+        return "Fecha/Hora"
+    if "dep" in bajo and "origen" in bajo:
+        return "Deposito origen"
+    if "dep" in bajo and "destino" in bajo:
+        return "Deposito destino"
+    if "dep" in bajo:
+        return "Deposito"
+    if "ubic" in bajo or "locaci" in bajo:
+        return "Ubicacion"
+    if "art" in bajo and "culo" in bajo:
+        return "Articulo"
+    if "descrip" in bajo:
+        return "Descripcion"
+    if "codigo normalizado" in bajo or "digo normalizado" in bajo:
+        return "Codigo normalizado"
+    if "cantidad de c" in bajo and "digos" in bajo:
+        return "Cantidad de codigos diferentes"
+    if "digos que componen" in bajo:
+        return "Codigos que componen el pallet"
+    if "lineas" in bajo or "neas" in bajo:
+        return "Lineas"
+    if "mas" in bajo:
+        return "Mas"
+    return re.sub(r"[^A-Za-z0-9 /_-]+", " ", texto).strip() or "Columna"
+
+
+def limpiar_df_visible(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    salida = df.copy()
+    salida.columns = [limpiar_columna_visible(c) for c in salida.columns]
+    return salida
+
+
 def salidas_polo_df() -> pd.DataFrame:
     columnas = ["salida_id", "fecha_hora", "codigo_normalizado", "articulo", "descripcion", "ubicacion", "cantidad", "responsable", "observaciones"]
     df = pd.DataFrame(st.session_state.get("salidas_polo", []))
