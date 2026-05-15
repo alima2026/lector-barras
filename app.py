@@ -4,6 +4,7 @@ import re
 import sqlite3
 import base64
 import hashlib
+import uuid
 from difflib import SequenceMatcher
 from datetime import datetime
 from pathlib import Path
@@ -207,12 +208,55 @@ def fecha_estado_db(clave: str) -> str:
         return ""
 
 
-def guardar_mudanza_actual_db() -> None:
+def firma_item_mudanza(item: dict) -> str:
+    campos = [
+        "fecha_hora", "deposito_origen", "deposito_destino", "pallet", "cantidad_bultos", "bulto",
+        "lectura_scanner", "articulo", "descripcion", "cantidad_mudada", "codigo_normalizado", "ubicacion",
+        "observaciones",
+    ]
+    base = "|".join(str(item.get(c, "")).strip() for c in campos)
+    return hashlib.sha1(base.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def fusionar_items_mudanza(items_nube: list, items_locales: list) -> list:
+    fusionados = []
+    vistos = set()
+    for origen in (items_nube or [], items_locales or []):
+        for item in origen:
+            if not isinstance(item, dict):
+                continue
+            clave = str(item.get("item_uid", "")).strip() or firma_item_mudanza(item)
+            if clave in vistos:
+                for i, existente in enumerate(fusionados):
+                    clave_existente = str(existente.get("item_uid", "")).strip() or firma_item_mudanza(existente)
+                    if clave_existente == clave:
+                        fusionados[i] = item
+                        break
+            else:
+                vistos.add(clave)
+                fusionados.append(item)
+    return fusionados
+
+
+def guardar_mudanza_actual_db(fusionar_con_nube: bool = True) -> None:
+    pick_items = st.session_state.get("pick_items", [])
+    pick_seq = st.session_state.get("pick_seq", 0)
+    if fusionar_con_nube and nube_disponible():
+        estado_nube = cargar_estado_nube("mudanza_actual", {"pick_items": [], "pick_seq": 0})
+        if isinstance(estado_nube, dict):
+            pick_items = fusionar_items_mudanza(estado_nube.get("pick_items", []), pick_items)
+            pick_seq = max(
+                int(estado_nube.get("pick_seq", 0) or 0),
+                int(pick_seq or 0),
+                max([int(x.get("item_id", 0) or 0) for x in pick_items if isinstance(x, dict)] or [0]),
+            )
+            st.session_state.pick_items = pick_items
+            st.session_state.pick_seq = pick_seq
     guardar_estado_db(
         "mudanza_actual",
         {
-            "pick_items": st.session_state.get("pick_items", []),
-            "pick_seq": st.session_state.get("pick_seq", 0),
+            "pick_items": pick_items,
+            "pick_seq": pick_seq,
         },
     )
 
@@ -1497,6 +1541,7 @@ def agregar_item_a_mudanza(
 
     st.session_state.pick_items.append(
         {
+            "item_uid": uuid.uuid4().hex,
             "item_id": st.session_state.pick_seq,
             "fecha_hora": ahora,
             "deposito_origen": deposito_origen.strip() or "DARKINEL",
@@ -1525,6 +1570,81 @@ def agregar_item_a_mudanza(
         }
     )
     return True, "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo agregado a la mudanza."
+
+
+def registrar_pallet_sin_detalle(
+    pallet: int,
+    cantidad_bultos: int,
+    deposito_origen: str,
+    deposito_destino: str,
+    observaciones: str = "",
+) -> None:
+    st.session_state.pick_seq += 1
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    st.session_state.pick_items.append(
+        {
+            "item_uid": uuid.uuid4().hex,
+            "item_id": st.session_state.pick_seq,
+            "fecha_hora": ahora,
+            "deposito_origen": deposito_origen.strip() or "DARKINEL",
+            "deposito_destino": deposito_destino.strip() or "POLO LOGISTICO",
+            "pallet": int(pallet),
+            "cantidad_bultos": int(cantidad_bultos),
+            "bulto": 1,
+            "cantidades_bulto": "Caja 1 = Cantidad 0",
+            "bultos_item": "1",
+            "ubicacion": "PENDIENTE",
+            "lectura_scanner": f"PALLET-{int(pallet)}-SIN-DETALLE",
+            "articulo": "",
+            "descripcion": "PALLET REGISTRADO SIN DETALLE",
+            "estado": "PENDIENTE",
+            "unidad": "uni",
+            "cantidad_mudada": 0.0,
+            "stock_total": 0.0,
+            "codigo_normalizado": f"PALLET{int(pallet):03d}SINDETALLE",
+            "observaciones": observaciones.strip() or "Pallet registrado sin detalle para no perder numeracion",
+            "cantidad_recibida": 0.0,
+            "recepcion_ok": False,
+            "ubicacion_recepcion": "",
+            "receptor": "",
+            "fecha_recepcion": "",
+            "observaciones_recepcion": "",
+        }
+    )
+
+
+def parsear_lineas_pallet_faltante(texto: str) -> list[dict]:
+    lineas = []
+    for raw in str(texto or "").splitlines():
+        linea = raw.strip()
+        if not linea:
+            continue
+        partes = [p.strip() for p in re.split(r"\s*[;|]\s*", linea) if p.strip()]
+        if len(partes) >= 4:
+            caja_txt, codigo, descripcion, piezas_txt = partes[0], partes[1], " ".join(partes[2:-1]), partes[-1]
+            caja = entero_seguro(caja_txt, len(lineas) + 1)
+        elif len(partes) >= 3:
+            codigo, descripcion, piezas_txt = partes[0], " ".join(partes[1:-1]), partes[-1]
+            caja = len(lineas) + 1
+        else:
+            tokens = linea.split()
+            if len(tokens) < 3:
+                continue
+            codigo, piezas_txt = tokens[0], tokens[-1]
+            descripcion = " ".join(tokens[1:-1])
+            caja = len(lineas) + 1
+        piezas = numero_seguro(str(piezas_txt).replace(",", "."), 0)
+        if not codigo or piezas <= 0:
+            continue
+        lineas.append(
+            {
+                "caja": max(int(caja), 1),
+                "codigo": str(codigo).strip().upper(),
+                "descripcion": str(descripcion).strip().upper() or "SIN DESCRIPCION",
+                "piezas": float(piezas),
+            }
+        )
+    return lineas
 
 
 def actualizar_ubicacion_item(item_id: int, nueva_ubicacion: str) -> Tuple[bool, str]:
@@ -2458,7 +2578,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
 def limpiar_mudanza_actual() -> None:
     st.session_state.pick_items = []
     st.session_state.pick_seq = 0
-    guardar_mudanza_actual_db()
+    guardar_mudanza_actual_db(fusionar_con_nube=False)
 
 
 # -----------------------------
@@ -2665,14 +2785,14 @@ if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not
         if st.button("Usar control anterior como mudanza activa", type="primary"):
             st.session_state.pick_items = df_reimpresion.to_dict("records")
             st.session_state.pick_seq = int(pd.to_numeric(df_reimpresion["item_id"], errors="coerce").fillna(0).max())
-            guardar_mudanza_actual_db()
+            guardar_mudanza_actual_db(fusionar_con_nube=False)
             st.success("Mudanza cargada desde el control anterior.")
             st.rerun()
     else:
         if st.button("Reemplazar mudanza actual por control anterior"):
             st.session_state.pick_items = df_reimpresion.to_dict("records")
             st.session_state.pick_seq = int(pd.to_numeric(df_reimpresion["item_id"], errors="coerce").fillna(0).max())
-            guardar_mudanza_actual_db()
+            guardar_mudanza_actual_db(fusionar_con_nube=False)
             st.success("Mudanza reemplazada por el control anterior.")
             st.rerun()
 
@@ -2903,6 +3023,82 @@ with tab_buscar:
             )
 
 with tab_pallets:
+    st.subheader("Control de pallets hechos")
+    pallets_actuales = set(pd.to_numeric(df_operativo.get("pallet", pd.Series(dtype=float)), errors="coerce").dropna().astype(int).tolist()) if not df_operativo.empty else set()
+    max_pallet_actual = max(pallets_actuales) if pallets_actuales else 0
+    p_ctrl1, p_ctrl2, p_ctrl3 = st.columns([1, 1, 2])
+    hasta_pallet = p_ctrl1.number_input("Ultimo pallet impreso", min_value=1, value=max(52, max_pallet_actual or 1), step=1)
+    cajas_faltantes = p_ctrl2.number_input("Cajas por pallet faltante", min_value=1, value=int(cantidad_bultos_activo), step=1)
+    faltantes = [p for p in range(1, int(hasta_pallet) + 1) if p not in pallets_actuales]
+    p_ctrl3.write(f"Pallets faltantes: {', '.join(map(str, faltantes[:20]))}{'...' if len(faltantes) > 20 else ''}" if faltantes else "No hay pallets faltantes en ese rango.")
+    if st.button("Registrar pallets faltantes sin detalle"):
+        if not faltantes:
+            st.info("No hay pallets faltantes para registrar.")
+        else:
+            for pallet_faltante in faltantes:
+                registrar_pallet_sin_detalle(
+                    pallet_faltante,
+                    int(cajas_faltantes),
+                    deposito_origen,
+                    deposito_destino,
+                    observaciones="Pallet impreso/hecho, pendiente completar articulos",
+                )
+            guardar_mudanza_actual_db()
+            st.success(f"Registre {len(faltantes)} pallet(s) faltante(s) para no perder la numeracion.")
+            st.rerun()
+
+    with st.expander("Cargar pallet faltante con detalle de articulos", expanded=False):
+        st.caption("Usalo cuando el pallet existe impreso pero no quedo en el sistema. Formato recomendado: codigo; descripcion; piezas. Tambien acepta: caja; codigo; descripcion; piezas.")
+        fp1, fp2, fp3 = st.columns([1, 1, 1])
+        pallet_faltante_detalle = fp1.number_input("Pallet faltante", min_value=1, value=max_pallet_actual + 1 if max_pallet_actual else 1, step=1, key="pallet_faltante_detalle")
+        cajas_faltante_detalle = fp2.number_input("Cantidad de cajas", min_value=1, value=1, step=1, key="cajas_faltante_detalle")
+        ubicacion_faltante_detalle = fp3.text_input("Ubicacion inicial", value="PENDIENTE", key="ubicacion_faltante_detalle")
+        texto_faltante = st.text_area(
+            "Lineas del pallet",
+            height=140,
+            placeholder="KDY3-62-31XA; ESPOLON; 2\nTKY0-52-31XD; ESPOLON; 1",
+            key="texto_pallet_faltante",
+        )
+        lineas_faltante = parsear_lineas_pallet_faltante(texto_faltante)
+        if lineas_faltante:
+            st.dataframe(pd.DataFrame(lineas_faltante).rename(columns={"caja": "Caja", "codigo": "Articulo", "descripcion": "Descripcion", "piezas": "Piezas"}), use_container_width=True, hide_index=True)
+        if st.button("Agregar este pallet faltante a la mudanza", type="primary"):
+            if not lineas_faltante:
+                st.error("No pude leer lineas validas. Usa por ejemplo: KDY3-62-31XA; ESPOLON; 2")
+            else:
+                agregados_faltante = 0
+                for linea in lineas_faltante:
+                    row_manual = pd.Series(
+                        {
+                            "articulo": linea["codigo"],
+                            "descripcion": linea["descripcion"],
+                            "estado": "MANUAL",
+                            "unidad": "uni",
+                            "cantidad": linea["piezas"],
+                            "codigo_normalizado": normalizar_codigo(linea["codigo"]),
+                        }
+                    )
+                    ok, _msg = agregar_item_a_mudanza(
+                        lectura_original=linea["codigo"],
+                        row=row_manual,
+                        cantidad_mudada=linea["piezas"],
+                        pallet=int(pallet_faltante_detalle),
+                        cantidad_bultos=int(cajas_faltante_detalle),
+                        bulto=min(int(linea["caja"]), int(cajas_faltante_detalle)),
+                        bultos_item="",
+                        cantidades_bulto=f"Caja {min(int(linea['caja']), int(cajas_faltante_detalle))} = Cantidad {formatear_numero(linea['piezas'])}",
+                        ubicacion=ubicacion_faltante_detalle,
+                        deposito_origen=deposito_origen,
+                        deposito_destino=deposito_destino,
+                        observaciones="Pallet faltante cargado desde hoja impresa",
+                        validar_stock=False,
+                    )
+                    if ok:
+                        agregados_faltante += 1
+                guardar_mudanza_actual_db()
+                st.success(f"Agregue {agregados_faltante} linea(s) del pallet {int(pallet_faltante_detalle)}.")
+                st.rerun()
+
     st.subheader("Composicion por pallet")
     st.dataframe(limpiar_df_visible(resumen_pallets(df_operativo)), use_container_width=True, hide_index=True)
 
@@ -3171,7 +3367,7 @@ with tab_pallets:
         if st.button("Quitar lineas seleccionadas") and quitar:
             ids = {int(x.split(")", 1)[0]) for x in quitar}
             st.session_state.pick_items = [item for item in st.session_state.pick_items if int(item.get("item_id", 0)) not in ids]
-            guardar_mudanza_actual_db()
+            guardar_mudanza_actual_db(fusionar_con_nube=False)
             st.success("Lineas quitadas.")
             st.rerun()
 
