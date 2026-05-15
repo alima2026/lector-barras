@@ -902,6 +902,18 @@ def preparar_resultado_para_mostrar(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def mapa_frecuencia(frecuencias: pd.DataFrame) -> Dict[str, str]:
+    if frecuencias is None or frecuencias.empty:
+        return {}
+    if "codigo_normalizado" not in frecuencias.columns or "frecuencia" not in frecuencias.columns:
+        return {}
+    trabajo = frecuencias[["codigo_normalizado", "frecuencia"]].copy()
+    trabajo["codigo_normalizado"] = trabajo["codigo_normalizado"].astype(str).str.strip()
+    trabajo["frecuencia"] = trabajo["frecuencia"].fillna("").astype(str).str.strip()
+    trabajo = trabajo[trabajo["codigo_normalizado"] != ""]
+    return dict(zip(trabajo["codigo_normalizado"], trabajo["frecuencia"]))
+
+
 def inventario_para_buscar(
     stock_consolidado: pd.DataFrame,
     df_pick: pd.DataFrame,
@@ -912,19 +924,24 @@ def inventario_para_buscar(
     columnas = ["codigo_normalizado", "articulo", "descripcion", "deposito", "ubicacion", "cantidad", "frecuencia"]
     partes = []
 
-    darkinel = stock_darkinel_actualizado(stock_consolidado, df_pick)
+    darkinel = limpiar_df_visible(stock_darkinel_actualizado(stock_consolidado, df_pick))
     if not darkinel.empty:
-        dark = pd.DataFrame(
-            {
-                "codigo_normalizado": darkinel["CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado"].astype(str).str.strip(),
-                "articulo": darkinel["ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo"].astype(str).str.strip(),
-                "descripcion": darkinel["DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n"].astype(str).str.strip(),
-                "deposito": "DARKINEL",
-                "ubicacion": "DARKINEL",
-                "cantidad": pd.to_numeric(darkinel["Stock restante Darkinel"], errors="coerce").fillna(0),
-            }
-        )
-        partes.append(dark[dark["cantidad"] > 0].copy())
+        norm_col = extraer_columna(darkinel, ["Codigo normalizado"])
+        art_col = extraer_columna(darkinel, ["Articulo"])
+        desc_col = extraer_columna(darkinel, ["Descripcion"])
+        stock_col = extraer_columna(darkinel, ["Stock restante Darkinel"])
+        if norm_col and art_col and stock_col:
+            dark = pd.DataFrame(
+                {
+                    "codigo_normalizado": darkinel[norm_col].astype(str).str.strip(),
+                    "articulo": darkinel[art_col].astype(str).str.strip(),
+                    "descripcion": darkinel[desc_col].astype(str).str.strip() if desc_col else "",
+                    "deposito": "DARKINEL",
+                    "ubicacion": "DARKINEL",
+                    "cantidad": pd.to_numeric(darkinel[stock_col], errors="coerce").fillna(0),
+                }
+            )
+            partes.append(dark[dark["cantidad"] > 0].copy())
 
     trabajo_polo = normalizar_df_pick(df_pick) if df_pick is not None and not df_pick.empty and (salidas is None or salidas.empty) else pd.DataFrame()
     if not trabajo_polo.empty:
@@ -947,38 +964,38 @@ def inventario_para_buscar(
         df_pick = pd.DataFrame()
         ubicaciones_anteriores = pd.DataFrame()
 
-    ubicaciones = ubicacion_polo_logistico(df_pick, ubicaciones_anteriores)
-    ubicaciones = aplicar_salidas_a_ubicaciones(ubicaciones, salidas)
+    ubicaciones = limpiar_df_visible(aplicar_salidas_a_ubicaciones(ubicacion_polo_logistico(df_pick, ubicaciones_anteriores), salidas))
     if not ubicaciones.empty:
-        ubic_col = extraer_columna(ubicaciones, ["UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n", "Ubicacion"])
-        polo = pd.DataFrame(
-            {
-                "codigo_normalizado": ubicaciones["CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado"].astype(str).str.strip(),
-                "articulo": ubicaciones["ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo"].astype(str).str.strip(),
-                "descripcion": ubicaciones["DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n"].astype(str).str.strip(),
-                "deposito": "POLO LOGISTICO",
-                "ubicacion": ubicaciones[ubic_col].astype(str).str.strip().str.upper() if ubic_col else "",
-                "cantidad": pd.to_numeric(ubicaciones["Piezas"], errors="coerce").fillna(0),
-            }
-        )
-        polo = polo[polo["ubicacion"].apply(es_ubicacion_real)].copy()
-        if not polo.empty:
-            partes.append(
-                polo.groupby(["codigo_normalizado", "articulo", "descripcion", "deposito", "ubicacion"], as_index=False)
-                .agg(cantidad=("cantidad", "sum"))
+        norm_col = extraer_columna(ubicaciones, ["Codigo normalizado"])
+        art_col = extraer_columna(ubicaciones, ["Articulo"])
+        desc_col = extraer_columna(ubicaciones, ["Descripcion"])
+        ubic_col = extraer_columna(ubicaciones, ["Ubicacion"])
+        piezas_col = extraer_columna(ubicaciones, ["Piezas"])
+        if norm_col and art_col and ubic_col and piezas_col:
+            polo = pd.DataFrame(
+                {
+                    "codigo_normalizado": ubicaciones[norm_col].astype(str).str.strip(),
+                    "articulo": ubicaciones[art_col].astype(str).str.strip(),
+                    "descripcion": ubicaciones[desc_col].astype(str).str.strip() if desc_col else "",
+                    "deposito": "POLO LOGISTICO",
+                    "ubicacion": ubicaciones[ubic_col].astype(str).str.strip().str.upper(),
+                    "cantidad": pd.to_numeric(ubicaciones[piezas_col], errors="coerce").fillna(0),
+                }
             )
+            polo = polo[polo["ubicacion"].apply(es_ubicacion_real)].copy()
+            if not polo.empty:
+                partes.append(
+                    polo.groupby(["codigo_normalizado", "articulo", "descripcion", "deposito", "ubicacion"], as_index=False)
+                    .agg(cantidad=("cantidad", "sum"))
+                )
 
     if not partes:
         return pd.DataFrame(columns=columnas)
 
     inventario = pd.concat(partes, ignore_index=True)
-    if frecuencias is not None and not frecuencias.empty:
-        frec = frecuencias[["codigo_normalizado", "frecuencia"]].drop_duplicates("codigo_normalizado")
-        inventario = inventario.merge(frec, on="codigo_normalizado", how="left")
-    else:
-        inventario["frecuencia"] = ""
-    inventario["frecuencia"] = inventario["frecuencia"].fillna("").replace("", "Sin ventas registradas")
-    inventario["cantidad"] = inventario["cantidad"].apply(formatear_numero)
+    inventario["codigo_normalizado"] = inventario["codigo_normalizado"].astype(str).str.strip()
+    inventario["frecuencia"] = inventario["codigo_normalizado"].map(mapa_frecuencia(frecuencias)).fillna("Sin ventas registradas")
+    inventario = inventario[inventario["codigo_normalizado"] != ""].copy()
     return inventario[columnas]
 
 
@@ -1036,6 +1053,12 @@ def limpiar_columna_visible(columna) -> str:
     if not any(marca in texto for marca in ["Ã", "Â", "â", "ƒ", "ð"]):
         return texto
     bajo = texto.lower()
+    if "ok" in bajo and "recepci" in bajo:
+        return "OK recepcion"
+    if "fecha" in bajo and "recepci" in bajo:
+        return "Fecha recepcion"
+    if "observaciones" in bajo and "recepci" in bajo:
+        return "Observaciones recepcion"
     if "fecha" in bajo and "hora" in bajo:
         return "Fecha/Hora"
     if "dep" in bajo and "origen" in bajo:
@@ -1044,6 +1067,10 @@ def limpiar_columna_visible(columna) -> str:
         return "Deposito destino"
     if "dep" in bajo:
         return "Deposito"
+    if ("ubic" in bajo or "locaci" in bajo) and "polo" in bajo:
+        return "Ubicacion Polo"
+    if ("ubic" in bajo or "locaci" in bajo) and "informada" in bajo:
+        return "Ubicacion informada"
     if "ubic" in bajo or "locaci" in bajo:
         return "Ubicacion"
     if "art" in bajo and "culo" in bajo:
@@ -1068,6 +1095,7 @@ def limpiar_df_visible(df: pd.DataFrame) -> pd.DataFrame:
         return df
     salida = df.copy()
     salida.columns = [limpiar_columna_visible(c) for c in salida.columns]
+    salida = salida.loc[:, ~pd.Index(salida.columns).duplicated()]
     return salida
 
 
@@ -1514,90 +1542,32 @@ def mudado_por_codigo(df_pick: pd.DataFrame) -> pd.DataFrame:
 
 
 def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame(
-            columns=[
-                "Fecha/Hora",
-                "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito origen",
-                "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito destino",
-                "Pallet",
-                "Cantidad de cajas",
-                "Caja",
-                "Piezas en esta caja",
-                "UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-                "Lectura scanner",
-                "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo",
-                "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-                "Unidad",
-                "Piezas enviadas",
-                "Stock original Darkinel",
-                "Stock restante Darkinel",
-                "CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado",
-                "Observaciones",
-            ]
-        )
-
-    df = normalizar_df_pick(df)
-
-    cols = [
-        "fecha_hora",
-        "deposito_origen",
-        "deposito_destino",
-        "pallet",
-        "cantidad_bultos",
-        "bulto",
-        "piezas_en_caja",
-        "ubicacion",
-        "lectura_scanner",
-        "articulo",
-        "descripcion",
-        "unidad",
-        "cantidad_mudada",
-        "stock_total",
-        "stock_restante_darkinel",
-        "codigo_normalizado",
-        "observaciones",
+    columnas = [
+        "Fecha/Hora", "Deposito origen", "Deposito destino", "Pallet", "Cantidad de cajas", "Caja",
+        "Piezas en esta caja", "Ubicacion", "Lectura scanner", "Articulo", "Descripcion", "Unidad",
+        "Piezas enviadas", "Stock original Darkinel", "Stock restante Darkinel", "Codigo normalizado", "Observaciones",
     ]
-    cols = [c for c in cols if c in df.columns]
-    return df[cols].rename(
-        columns={
-            "fecha_hora": "Fecha/Hora",
-            "deposito_origen": "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito origen",
-            "deposito_destino": "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito destino",
-            "pallet": "Pallet",
-            "cantidad_bultos": "Cantidad de cajas",
-            "bulto": "Caja",
-            "piezas_en_caja": "Piezas en esta caja",
-            "ubicacion": "UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-            "lectura_scanner": "Lectura scanner",
-            "articulo": "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo",
-            "descripcion": "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-            "unidad": "Unidad",
-            "cantidad_mudada": "Piezas enviadas",
-            "stock_total": "Stock original Darkinel",
-            "stock_restante_darkinel": "Stock restante Darkinel",
-            "codigo_normalizado": "CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado",
-            "observaciones": "Observaciones",
-        }
-    )
+    if df.empty:
+        return pd.DataFrame(columns=columnas)
+    df = normalizar_df_pick(df)
+    origen = [
+        "fecha_hora", "deposito_origen", "deposito_destino", "pallet", "cantidad_bultos", "bulto",
+        "piezas_en_caja", "ubicacion", "lectura_scanner", "articulo", "descripcion", "unidad",
+        "cantidad_mudada", "stock_total", "stock_restante_darkinel", "codigo_normalizado", "observaciones",
+    ]
+    salida = pd.DataFrame()
+    for col_origen, col_destino in zip(origen, columnas):
+        salida[col_destino] = df[col_origen] if col_origen in df.columns else ""
+    return salida
 
 
 def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
+    columnas = [
+        "Deposito origen", "Deposito destino", "Pallet", "Cantidad de cajas", "Ubicaciones",
+        "Cantidad de codigos diferentes", "Piezas totales", "Codigos que componen el pallet", "Descripciones",
+    ]
     if df.empty:
-        return pd.DataFrame(
-            columns=[
-                "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito origen",
-                "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito destino",
-                "Pallet",
-                "Cantidad de cajas",
-                "Ubicaciones",
-                "Cantidad de cÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digos diferentes",
-                "Piezas totales",
-                "CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digos que componen el pallet",
-                "Descripciones",
-            ]
-        )
-
+        return pd.DataFrame(columns=columnas)
     trabajo = normalizar_df_pick(df)
     resumen = (
         trabajo.groupby(["deposito_origen", "deposito_destino", "pallet", "cantidad_bultos"], dropna=False)
@@ -1611,19 +1581,17 @@ def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     resumen["unidades_totales"] = resumen["unidades_totales"].apply(formatear_numero)
-    return resumen.rename(
-        columns={
-            "deposito_origen": "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito origen",
-            "deposito_destino": "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito destino",
-            "pallet": "Pallet",
-            "cantidad_bultos": "Cantidad de cajas",
-            "ubicaciones": "Ubicaciones",
-            "codigos_distintos": "Cantidad de cÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digos diferentes",
-            "unidades_totales": "Piezas totales",
-            "codigos": "CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digos que componen el pallet",
-            "descripciones": "Descripciones",
-        }
-    )
+    return resumen.rename(columns={
+        "deposito_origen": "Deposito origen",
+        "deposito_destino": "Deposito destino",
+        "pallet": "Pallet",
+        "cantidad_bultos": "Cantidad de cajas",
+        "ubicaciones": "Ubicaciones",
+        "codigos_distintos": "Cantidad de codigos diferentes",
+        "unidades_totales": "Piezas totales",
+        "codigos": "Codigos que componen el pallet",
+        "descripciones": "Descripciones",
+    })[columnas]
 
 
 def stock_darkinel_actualizado(stock_consolidado: pd.DataFrame, df_pick: pd.DataFrame) -> pd.DataFrame:
@@ -1907,98 +1875,50 @@ def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFr
 
 def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.DataFrame) -> pd.DataFrame:
     columnas = [
-        "Fecha/Hora",
-        "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito origen",
-        "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito destino",
-        "Pallet",
-        "Cantidad de cajas",
-        "UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-        "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo",
-        "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-        "Piezas",
-        "CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado",
-        "Observaciones",
+        "Fecha/Hora", "Deposito origen", "Deposito destino", "Pallet", "Cantidad de cajas", "Ubicacion",
+        "Articulo", "Descripcion", "Piezas", "Codigo normalizado", "Observaciones",
     ]
     detalle = preparar_detalle_mudanza(df_pick)
     if not detalle.empty:
-        detalle = detalle[
-            [
-                "Fecha/Hora",
-                "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito origen",
-                "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito destino",
-                "Pallet",
-                "Cantidad de cajas",
-                "UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-                "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo",
-                "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-                "Piezas enviadas",
-                "CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado",
-                "Observaciones",
-            ]
-        ].rename(columns={"Piezas enviadas": "Piezas"})
-
+        seleccion = [
+            "Fecha/Hora", "Deposito origen", "Deposito destino", "Pallet", "Cantidad de cajas", "Ubicacion",
+            "Articulo", "Descripcion", "Piezas enviadas", "Codigo normalizado", "Observaciones",
+        ]
+        detalle = detalle[[c for c in seleccion if c in detalle.columns]].rename(columns={"Piezas enviadas": "Piezas"})
     partes_ubicacion = []
     if ubicaciones_anteriores is not None and not ubicaciones_anteriores.empty:
-        anterior = ubicaciones_anteriores.copy()
+        anterior = limpiar_df_visible(ubicaciones_anteriores.copy())
         anterior["_fuente_actual"] = 0
         partes_ubicacion.append(anterior)
     if detalle is not None and not detalle.empty:
         actual = detalle.copy()
         actual["_fuente_actual"] = 1
         partes_ubicacion.append(actual)
-
     combinado = pd.concat(partes_ubicacion, ignore_index=True) if partes_ubicacion else pd.DataFrame(columns=columnas)
-
     if combinado is None or combinado.empty:
         return pd.DataFrame(columns=columnas)
-
     for col in columnas:
         if col not in combinado.columns:
             combinado[col] = ""
     if "_fuente_actual" not in combinado.columns:
         combinado["_fuente_actual"] = 0
     combinado = combinado[columnas + ["_fuente_actual"]].copy()
-
-    texto_cols = [
-        "Fecha/Hora",
-        "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito origen",
-        "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito destino",
-        "UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-        "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo",
-        "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-        "CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado",
-        "Observaciones",
-    ]
-    for col in texto_cols:
+    for col in ["Fecha/Hora", "Deposito origen", "Deposito destino", "Ubicacion", "Articulo", "Descripcion", "Codigo normalizado", "Observaciones"]:
         combinado[col] = combinado[col].fillna("").astype(str).str.strip()
-
     combinado["Pallet"] = pd.to_numeric(combinado["Pallet"], errors="coerce").fillna(0).astype(int)
     combinado["Cantidad de cajas"] = pd.to_numeric(combinado["Cantidad de cajas"], errors="coerce").fillna(0).astype(int)
     combinado["Piezas"] = pd.to_numeric(combinado["Piezas"], errors="coerce").fillna(0)
-
-    ubicacion_upper = combinado["UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n"].astype(str).str.strip().str.upper()
+    ubicacion_upper = combinado["Ubicacion"].astype(str).str.strip().str.upper()
     combinado["_ubicacion_real"] = (~ubicacion_upper.isin(["", "PENDIENTE", "NAN"])).astype(int)
     combinado["_fuente_actual"] = pd.to_numeric(combinado["_fuente_actual"], errors="coerce").fillna(0).astype(int)
     combinado["_orden_original"] = range(len(combinado))
-
-    claves_linea = [
-        "Fecha/Hora",
-        "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito origen",
-        "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito destino",
-        "Pallet",
-        "Cantidad de cajas",
-        "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo",
-        "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-        "Piezas",
-        "Observaciones",
-    ]
+    claves_linea = ["Fecha/Hora", "Deposito origen", "Deposito destino", "Pallet", "Cantidad de cajas", "Articulo", "Descripcion", "Piezas", "Observaciones"]
     combinado["_ocurrencia"] = combinado.groupby(claves_linea + ["_fuente_actual"], dropna=False).cumcount()
     claves_unicas = claves_linea + ["_ocurrencia"]
-
     combinado = (
         combinado.sort_values(["_fuente_actual", "_ubicacion_real", "_orden_original"], ascending=[False, False, False])
         .drop_duplicates(claves_unicas, keep="first")
-        .sort_values(["Pallet", "Cantidad de cajas", "Fecha/Hora", "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo", "_orden_original"])
+        .sort_values(["Pallet", "Cantidad de cajas", "Fecha/Hora", "Articulo", "_orden_original"])
         .drop(columns=["_fuente_actual", "_ubicacion_real", "_orden_original", "_ocurrencia"], errors="ignore")
         .reset_index(drop=True)
     )
@@ -2055,64 +1975,25 @@ def historial_mudanzas(df_pick: pd.DataFrame, historial_anterior: pd.DataFrame) 
 
 
 def preparar_recepcion_polo(df_pick: pd.DataFrame) -> pd.DataFrame:
+    columnas = [
+        "Fecha recepcion", "Receptor", "OK recepcion", "Pallet", "Caja", "Ubicacion informada",
+        "Articulo", "Descripcion", "Unidad", "Piezas enviadas", "Piezas recibidas", "Diferencia",
+        "Codigo normalizado", "Observaciones recepcion",
+    ]
     if df_pick.empty:
-        return pd.DataFrame(
-            columns=[
-                "Fecha recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-                "Receptor",
-                "OK recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-                "Pallet",
-                "Caja",
-                "UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n informada",
-                "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo",
-                "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-                "Unidad",
-                "Piezas enviadas",
-                "Piezas recibidas",
-                "Diferencia",
-                "CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado",
-                "Observaciones recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-            ]
-        )
-
+        return pd.DataFrame(columns=columnas)
     trabajo = normalizar_df_pick(df_pick)
     recepcion = trabajo.copy()
     recepcion["diferencia"] = pd.to_numeric(recepcion["cantidad_recibida"], errors="coerce").fillna(0) - pd.to_numeric(recepcion["cantidad_mudada"], errors="coerce").fillna(0)
-    return recepcion[
-        [
-            "fecha_recepcion",
-            "receptor",
-            "recepcion_ok",
-            "pallet",
-            "bulto",
-            "ubicacion_recepcion",
-            "articulo",
-            "descripcion",
-            "unidad",
-            "cantidad_mudada",
-            "cantidad_recibida",
-            "diferencia",
-            "codigo_normalizado",
-            "observaciones_recepcion",
-        ]
-    ].rename(
-        columns={
-            "fecha_recepcion": "Fecha recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-            "receptor": "Receptor",
-            "recepcion_ok": "OK recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-            "pallet": "Pallet",
-            "bulto": "Caja",
-            "ubicacion_recepcion": "UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n informada",
-            "articulo": "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo",
-            "descripcion": "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-            "unidad": "Unidad",
-            "cantidad_mudada": "Piezas enviadas",
-            "cantidad_recibida": "Piezas recibidas",
-            "diferencia": "Diferencia",
-            "codigo_normalizado": "CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado",
-            "observaciones_recepcion": "Observaciones recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
-        }
-    )
+    origen = [
+        "fecha_recepcion", "receptor", "recepcion_ok", "pallet", "bulto", "ubicacion_recepcion",
+        "articulo", "descripcion", "unidad", "cantidad_mudada", "cantidad_recibida", "diferencia",
+        "codigo_normalizado", "observaciones_recepcion",
+    ]
+    salida = pd.DataFrame()
+    for col_origen, col_destino in zip(origen, columnas):
+        salida[col_destino] = recepcion[col_origen] if col_origen in recepcion.columns else ""
+    return salida
 
 
 def generar_excel_control(
@@ -2728,7 +2609,7 @@ tab_buscar, tab_pallets, tab_recepcion, tab_salidas, tab_bases, tab_stock = st.t
 with tab_buscar:
     modo = st.radio("Modo de busqueda", ["Un codigo", "Varios codigos"], horizontal=True)
 
-    if modo == "Un cÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo":
+    if modo == "Un codigo":
         codigo = st.text_input("Escanea o digita el codigo", placeholder="Ejemplo: B6Y114302A J")
 
         if codigo:
@@ -2971,6 +2852,7 @@ with tab_pallets:
                 "observaciones": "Observaciones",
             }
         )
+        detalle_editor = limpiar_df_visible(detalle_editor)
         detalle_editado = st.data_editor(
             detalle_editor,
             use_container_width=True,
@@ -2982,26 +2864,27 @@ with tab_pallets:
         if st.button("Guardar cambios del detalle"):
             por_id = {int(item.get("item_id", 0)): item for item in st.session_state.pick_items}
             for row in detalle_editado.to_dict("records"):
+                row = {limpiar_columna_visible(k): v for k, v in row.items()}
                 item_id = int(row.get("ID", 0))
                 item = por_id.get(item_id)
                 if not item:
                     continue
                 item["fecha_hora"] = str(row.get("Fecha/Hora", "")).strip()
-                item["deposito_origen"] = str(row.get("DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito origen", "")).strip() or "DARKINEL"
-                item["deposito_destino"] = str(row.get("DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito destino", "")).strip() or "POLO LOGISTICO"
+                item["deposito_origen"] = str(row.get("Deposito origen", "")).strip() or "DARKINEL"
+                item["deposito_destino"] = str(row.get("Deposito destino", "")).strip() or "POLO LOGISTICO"
                 item["pallet"] = entero_seguro(row.get("Pallet", 1), 1)
                 item["cantidad_bultos"] = entero_seguro(row.get("Cantidad de cajas", row.get("Cantidad de bultos", 1)), 1)
                 item["bulto"] = max(1, min(entero_seguro(row.get("Caja", row.get("Bulto", 1)), 1), int(item["cantidad_bultos"])))
                 piezas_enviadas = row.get("Piezas en esta caja", row.get("Piezas enviadas", row.get("Cantidad mudada", 0)))
                 item["cantidades_bulto"] = normalizar_cantidades_por_bulto(f"Caja {item['bulto']} = Cantidad {piezas_enviadas}", piezas_enviadas, item["bulto"])
                 item["bultos_item"] = bultos_desde_distribucion(item["cantidades_bulto"], piezas_enviadas, item["bulto"])
-                item["ubicacion"] = str(row.get("UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n", "")).strip().upper() or "PENDIENTE"
+                item["ubicacion"] = str(row.get("Ubicacion", "")).strip().upper() or "PENDIENTE"
                 item["lectura_scanner"] = str(row.get("Lectura scanner", "")).strip()
-                item["articulo"] = str(row.get("ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo", "")).strip()
-                item["descripcion"] = str(row.get("DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n", "")).strip()
+                item["articulo"] = str(row.get("Articulo", "")).strip()
+                item["descripcion"] = str(row.get("Descripcion", "")).strip()
                 item["unidad"] = str(row.get("Unidad", "")).strip()
                 item["cantidad_mudada"] = suma_cantidades_bulto(item["cantidades_bulto"], piezas_enviadas, item["bulto"]) or numero_seguro(piezas_enviadas, 0)
-                item["codigo_normalizado"] = str(row.get("CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado", "")).strip() or normalizar_codigo(item["articulo"])
+                item["codigo_normalizado"] = str(row.get("Codigo normalizado", "")).strip() or normalizar_codigo(item["articulo"])
                 item["observaciones"] = str(row.get("Observaciones", "")).strip()
             guardar_mudanza_actual_db()
             st.success("Detalle actualizado.")
@@ -3253,13 +3136,14 @@ with tab_recepcion:
                 "observaciones_recepcion": "Observaciones recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n",
             }
         )
-        recepcion_editor["OK recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n"] = True
+        recepcion_editor = limpiar_df_visible(recepcion_editor)
+        recepcion_editor["OK recepcion"] = True
 
         recepcion_editada = st.data_editor(
             recepcion_editor,
             use_container_width=True,
             hide_index=True,
-            disabled=["ID", "Pallet", "Caja", "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo", "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n", "Unidad", "Piezas enviadas", "UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n Polo", "Recibido por", "Fecha recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n"],
+            disabled=["ID", "Pallet", "Caja", "Articulo", "Descripcion", "Unidad", "Piezas enviadas", "Ubicacion Polo", "Recibido por", "Fecha recepcion"],
             num_rows="fixed",
             key="recepcion_polo_editor",
         )
@@ -3268,7 +3152,7 @@ with tab_recepcion:
             if not str(ubicacion_pallet).strip():
                 st.error("Informa la ubicacion del pallet antes de guardar.")
                 st.stop()
-            if not bool(recepcion_editada["OK recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n"].astype(bool).all()):
+            if not bool(recepcion_editada["OK recepcion"].astype(bool).all()):
                 st.error("Hay lineas desmarcadas. Este pallet no se guarda hasta que todo este OK.")
                 st.stop()
 
@@ -3286,14 +3170,14 @@ with tab_recepcion:
                 item["ubicacion"] = ubicacion_polo
                 item["receptor"] = str(receptor_pallet).strip()
                 item["fecha_recepcion"] = ahora_recepcion
-                item["observaciones_recepcion"] = str(row.get("Observaciones recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n", "")).strip()
+                item["observaciones_recepcion"] = str(row.get("Observaciones recepcion", "")).strip()
             guardar_mudanza_actual_db()
             st.success(f"Pallet {pallet_recepcion} recibido OK y ubicacion actualizada.")
             st.rerun()
 
         recepcion_actual = preparar_recepcion_polo(df_operativo)
         if not recepcion_actual.empty:
-            pendientes = int((~recepcion_actual["OK recepciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n"].astype(bool)).sum())
+            pendientes = int((~recepcion_actual["OK recepcion"].astype(bool)).sum())
             diferencias = int((pd.to_numeric(recepcion_actual["Diferencia"], errors="coerce").fillna(0) != 0).sum())
             r1, r2, r3 = st.columns(3)
             r1.metric("Lineas recibidas OK", len(recepcion_actual) - pendientes)
