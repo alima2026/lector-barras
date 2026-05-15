@@ -1626,12 +1626,18 @@ def parsear_lineas_pallet_faltante(texto: str) -> list[dict]:
         elif len(partes) >= 3:
             codigo, descripcion, piezas_txt = partes[0], " ".join(partes[1:-1]), partes[-1]
             caja = len(lineas) + 1
+        elif len(partes) == 1:
+            codigo, descripcion, piezas_txt = partes[0], "SIN DESCRIPCION", "1"
+            caja = len(lineas) + 1
         else:
             tokens = linea.split()
-            if len(tokens) < 3:
+            if len(tokens) == 1:
+                codigo, descripcion, piezas_txt = tokens[0], "SIN DESCRIPCION", "1"
+            elif len(tokens) < 3:
                 continue
-            codigo, piezas_txt = tokens[0], tokens[-1]
-            descripcion = " ".join(tokens[1:-1])
+            else:
+                codigo, piezas_txt = tokens[0], tokens[-1]
+                descripcion = " ".join(tokens[1:-1])
             caja = len(lineas) + 1
         piezas = numero_seguro(str(piezas_txt).replace(",", "."), 0)
         if not codigo or piezas <= 0:
@@ -3064,8 +3070,19 @@ with tab_pallets:
             st.dataframe(pd.DataFrame(lineas_faltante).rename(columns={"caja": "Caja", "codigo": "Articulo", "descripcion": "Descripcion", "piezas": "Piezas"}), use_container_width=True, hide_index=True)
         if st.button("Agregar este pallet faltante a la mudanza", type="primary"):
             if not lineas_faltante:
-                st.error("No pude leer lineas validas. Usa por ejemplo: KDY3-62-31XA; ESPOLON; 2")
+                st.error("No pude leer lineas validas. Podes pegar solo codigos, uno por linea, o usar: KDY3-62-31XA; ESPOLON; 2")
             else:
+                codigo_placeholder = f"PALLET{int(pallet_faltante_detalle):03d}SINDETALLE"
+                st.session_state.pick_items = [
+                    item for item in st.session_state.pick_items
+                    if not (
+                        int(item.get("pallet", 0) or 0) == int(pallet_faltante_detalle)
+                        and (
+                            str(item.get("codigo_normalizado", "")).strip().upper() == codigo_placeholder
+                            or str(item.get("lectura_scanner", "")).strip().upper() == f"PALLET-{int(pallet_faltante_detalle)}-SIN-DETALLE"
+                        )
+                    )
+                ]
                 agregados_faltante = 0
                 for linea in lineas_faltante:
                     row_manual = pd.Series(
