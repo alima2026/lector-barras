@@ -1126,6 +1126,57 @@ def mostrar_inventario(df: pd.DataFrame) -> pd.DataFrame:
     )[columnas]
 
 
+def detalle_pallets_polo_consulta(
+    codigos_normalizados: list[str],
+    df_pick: pd.DataFrame,
+    ubicaciones_anteriores: pd.DataFrame,
+    salidas: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    columnas = ["Codigo normalizado", "Articulo", "Descripcion", "Pallet", "Caja", "Locacion", "Piezas", "Fecha/Hora", "Observaciones"]
+    codigos = {normalizar_codigo(c) for c in codigos_normalizados if str(c).strip()}
+    if not codigos:
+        return pd.DataFrame(columns=columnas)
+
+    ubicaciones = limpiar_df_visible(aplicar_salidas_a_ubicaciones(ubicacion_polo_logistico(df_pick, ubicaciones_anteriores), salidas))
+    if ubicaciones is None or ubicaciones.empty:
+        return pd.DataFrame(columns=columnas)
+
+    norm_col = extraer_columna(ubicaciones, ["Codigo normalizado"])
+    art_col = extraer_columna(ubicaciones, ["Articulo"])
+    desc_col = extraer_columna(ubicaciones, ["Descripcion"])
+    pallet_col = extraer_columna(ubicaciones, ["Pallet"])
+    caja_col = extraer_columna(ubicaciones, ["Caja"])
+    ubic_col = extraer_columna(ubicaciones, ["Ubicacion", "Ubicacion Polo"])
+    piezas_col = extraer_columna(ubicaciones, ["Piezas", "Piezas enviadas", "Piezas en esta caja"])
+    fecha_col = extraer_columna(ubicaciones, ["Fecha/Hora"])
+    obs_col = extraer_columna(ubicaciones, ["Observaciones", "Observaciones recepcion"])
+    if not norm_col or not ubic_col or not piezas_col:
+        return pd.DataFrame(columns=columnas)
+
+    detalle = pd.DataFrame(
+        {
+            "Codigo normalizado": ubicaciones[norm_col].map(normalizar_codigo),
+            "Articulo": ubicaciones[art_col].astype(str).str.strip() if art_col else "",
+            "Descripcion": ubicaciones[desc_col].astype(str).str.strip() if desc_col else "",
+            "Pallet": pd.to_numeric(ubicaciones[pallet_col], errors="coerce").fillna(0).astype(int) if pallet_col else 0,
+            "Caja": pd.to_numeric(ubicaciones[caja_col], errors="coerce").fillna(0).astype(int) if caja_col else "",
+            "Locacion": ubicaciones[ubic_col].astype(str).str.strip().str.upper(),
+            "Piezas": pd.to_numeric(ubicaciones[piezas_col], errors="coerce").fillna(0),
+            "Fecha/Hora": ubicaciones[fecha_col].astype(str).str.strip() if fecha_col else "",
+            "Observaciones": ubicaciones[obs_col].astype(str).str.strip() if obs_col else "",
+        }
+    )
+    detalle = detalle[
+        detalle["Codigo normalizado"].isin(codigos)
+        & detalle["Locacion"].apply(es_ubicacion_real)
+        & (detalle["Piezas"] > 0)
+    ].copy()
+    if detalle.empty:
+        return pd.DataFrame(columns=columnas)
+    detalle["Piezas"] = detalle["Piezas"].apply(formatear_numero)
+    return detalle.sort_values(["Pallet", "Caja", "Locacion", "Articulo"])[columnas].reset_index(drop=True)
+
+
 def limpiar_columna_visible(columna) -> str:
     texto = str(columna)
     if not any(marca in texto for marca in ["\u00c3", "\u00c2", "\u00e2", "\u00c6", "\ufffd"]):
@@ -3643,6 +3694,20 @@ with tab_stock:
             st.warning("No encontre ese codigo en Darkinel ni en Polo.")
         else:
             st.dataframe(limpiar_df_visible(mostrar_inventario(resultado_consulta)), use_container_width=True, hide_index=True)
+            codigos_polo = (
+                resultado_consulta.loc[
+                    resultado_consulta["deposito"].astype(str).str.upper().eq("POLO LOGISTICO"),
+                    "codigo_normalizado",
+                ]
+                .dropna()
+                .astype(str)
+                .unique()
+                .tolist()
+            )
+            detalle_polo = detalle_pallets_polo_consulta(codigos_polo, df_operativo, ubicaciones_operativas, salidas_polo_actual)
+            if not detalle_polo.empty:
+                with st.expander("Ver detalle de pallets enviados a Polo", expanded=False):
+                    st.dataframe(limpiar_df_visible(detalle_polo), use_container_width=True, hide_index=True)
     else:
         st.dataframe(limpiar_df_visible(mostrar_inventario(inventario_consulta.head(100))), use_container_width=True, hide_index=True)
 
