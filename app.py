@@ -218,6 +218,38 @@ def firma_item_mudanza(item: dict) -> str:
     return hashlib.sha1(base.encode("utf-8", errors="ignore")).hexdigest()
 
 
+def es_placeholder_pallet(item: dict) -> bool:
+    lectura = str(item.get("lectura_scanner", "")).strip().upper()
+    codigo = str(item.get("codigo_normalizado", "")).strip().upper()
+    descripcion = str(item.get("descripcion", "")).strip().upper()
+    return (
+        "SIN-DETALLE" in lectura
+        or "SINDETALLE" in codigo
+        or descripcion == "PALLET REGISTRADO SIN DETALLE"
+    )
+
+
+def quitar_placeholders_con_detalle(items: list) -> list:
+    pallets_con_detalle = {
+        int(item.get("pallet", 0) or 0)
+        for item in items or []
+        if isinstance(item, dict)
+        and not es_placeholder_pallet(item)
+        and numero_seguro(item.get("cantidad_mudada", 0), 0) > 0
+    }
+    if not pallets_con_detalle:
+        return items or []
+    return [
+        item
+        for item in items or []
+        if not (
+            isinstance(item, dict)
+            and es_placeholder_pallet(item)
+            and int(item.get("pallet", 0) or 0) in pallets_con_detalle
+        )
+    ]
+
+
 def fusionar_items_mudanza(items_nube: list, items_locales: list) -> list:
     fusionados = []
     vistos = set()
@@ -235,11 +267,11 @@ def fusionar_items_mudanza(items_nube: list, items_locales: list) -> list:
             else:
                 vistos.add(clave)
                 fusionados.append(item)
-    return fusionados
+    return quitar_placeholders_con_detalle(fusionados)
 
 
 def guardar_mudanza_actual_db(fusionar_con_nube: bool = True) -> None:
-    pick_items = st.session_state.get("pick_items", [])
+    pick_items = quitar_placeholders_con_detalle(st.session_state.get("pick_items", []))
     pick_seq = st.session_state.get("pick_seq", 0)
     if fusionar_con_nube and nube_disponible():
         estado_nube = cargar_estado_nube("mudanza_actual", {"pick_items": [], "pick_seq": 0})
@@ -252,6 +284,8 @@ def guardar_mudanza_actual_db(fusionar_con_nube: bool = True) -> None:
             )
             st.session_state.pick_items = pick_items
             st.session_state.pick_seq = pick_seq
+    else:
+        st.session_state.pick_items = pick_items
     guardar_estado_db(
         "mudanza_actual",
         {
@@ -1388,7 +1422,7 @@ def formulario_agregar_manual(
 def inicializar_estado() -> None:
     if "pick_items" not in st.session_state:
         estado_db = cargar_mudanza_actual_db()
-        st.session_state.pick_items = estado_db.get("pick_items", [])
+        st.session_state.pick_items = quitar_placeholders_con_detalle(estado_db.get("pick_items", []))
     if "pick_seq" not in st.session_state:
         estado_db = cargar_mudanza_actual_db()
         st.session_state.pick_seq = int(estado_db.get("pick_seq", 0) or 0)
@@ -1486,6 +1520,7 @@ def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
 
     trabajo["cantidad_bultos"] = pd.to_numeric(trabajo["cantidad_bultos"], errors="coerce").fillna(1).astype(int)
     trabajo["pallet"] = pd.to_numeric(trabajo["pallet"], errors="coerce").fillna(1).astype(int)
+    trabajo.loc[trabajo["pallet"] < 0, "pallet"] = 1
     trabajo["bulto"] = pd.to_numeric(trabajo["bulto"], errors="coerce").fillna(1).astype(int)
     trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
     trabajo["cantidades_bulto"] = trabajo.apply(
@@ -1766,6 +1801,7 @@ def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=columnas)
     trabajo = normalizar_df_pick(df)
+    trabajo = normalizar_df_pick(pd.DataFrame(quitar_placeholders_con_detalle(trabajo.to_dict("records"))))
     resumen = (
         trabajo.groupby(["deposito_origen", "deposito_destino", "pallet", "cantidad_bultos"], dropna=False)
         .agg(
@@ -3031,6 +3067,17 @@ with tab_buscar:
 with tab_pallets:
     st.subheader("Control de pallets hechos")
     pallets_actuales = set(pd.to_numeric(df_operativo.get("pallet", pd.Series(dtype=float)), errors="coerce").dropna().astype(int).tolist()) if not df_operativo.empty else set()
+    if 0 in pallets_actuales:
+        lineas_pallet_cero = int((pd.to_numeric(df_operativo.get("pallet", pd.Series(dtype=float)), errors="coerce").fillna(-1).astype(int) == 0).sum())
+        st.warning(f"Hay {lineas_pallet_cero} linea(s) con pallet 0. Ese pallet es invalido y conviene borrarlo.")
+        if st.button("Eliminar lineas con pallet 0"):
+            st.session_state.pick_items = [
+                item for item in st.session_state.pick_items
+                if int(pd.to_numeric(item.get("pallet", 0), errors="coerce") or 0) != 0
+            ]
+            guardar_mudanza_actual_db(fusionar_con_nube=False)
+            st.success("Lineas con pallet 0 eliminadas.")
+            st.rerun()
     max_pallet_actual = max(pallets_actuales) if pallets_actuales else 0
     p_ctrl1, p_ctrl2, p_ctrl3 = st.columns([1, 1, 2])
     hasta_pallet = p_ctrl1.number_input("Ultimo pallet impreso", min_value=1, value=max(52, max_pallet_actual or 1), step=1)
