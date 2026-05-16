@@ -296,15 +296,23 @@ def guardar_mudanza_actual_db(fusionar_con_nube: bool = True) -> None:
 
 
 def guardar_salidas_polo_db() -> None:
-    guardar_estado_db("salidas_polo", {"salidas": st.session_state.get("salidas_polo", []), "salida_seq": st.session_state.get("salida_seq", 0)})
+    guardar_estado_db(
+        "salidas_polo",
+        {
+            "salidas": st.session_state.get("salidas_polo", []),
+            "salida_seq": st.session_state.get("salida_seq", 0),
+            "remito_seq": st.session_state.get("remito_seq", 0),
+        },
+    )
 
 
 def cargar_salidas_polo_db() -> Dict[str, object]:
-    estado = cargar_estado_db("salidas_polo", {"salidas": [], "salida_seq": 0})
+    estado = cargar_estado_db("salidas_polo", {"salidas": [], "salida_seq": 0, "remito_seq": 0})
     if not isinstance(estado, dict):
-        return {"salidas": [], "salida_seq": 0}
+        return {"salidas": [], "salida_seq": 0, "remito_seq": 0}
     estado.setdefault("salidas", [])
     estado.setdefault("salida_seq", 0)
+    estado.setdefault("remito_seq", estado.get("salida_seq", 0) or 0)
     return estado
 
 
@@ -1229,7 +1237,10 @@ def limpiar_df_visible(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def salidas_polo_df() -> pd.DataFrame:
-    columnas = ["salida_id", "fecha_hora", "codigo_normalizado", "articulo", "descripcion", "ubicacion", "cantidad", "responsable", "observaciones"]
+    columnas = [
+        "salida_id", "remito_num", "fecha_hora", "solicitado_por", "responsable",
+        "codigo_normalizado", "articulo", "descripcion", "ubicacion", "cantidad", "observaciones",
+    ]
     df = pd.DataFrame(st.session_state.get("salidas_polo", []))
     if df.empty:
         return pd.DataFrame(columns=columnas)
@@ -1237,6 +1248,8 @@ def salidas_polo_df() -> pd.DataFrame:
         if col not in df.columns:
             df[col] = "" if col not in ["salida_id", "cantidad"] else 0
     df["salida_id"] = pd.to_numeric(df["salida_id"], errors="coerce").fillna(0).astype(int)
+    df["remito_num"] = df["remito_num"].fillna("").astype(str).str.strip()
+    df.loc[df["remito_num"].eq(""), "remito_num"] = df["salida_id"].map(lambda x: f"R{x:06d}" if int(x or 0) > 0 else "")
     df["codigo_normalizado"] = df["codigo_normalizado"].map(normalizar_codigo)
     df["ubicacion"] = df["ubicacion"].fillna("").astype(str).str.strip().str.upper()
     df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
@@ -1244,12 +1257,14 @@ def salidas_polo_df() -> pd.DataFrame:
 
 
 def mostrar_salidas_polo(df: pd.DataFrame) -> pd.DataFrame:
-    columnas = ["Fecha/Hora", "Codigo normalizado", "Articulo", "Descripcion", "Locacion", "Cantidad", "Responsable", "Observaciones"]
+    columnas = ["Remito", "Fecha/Hora", "Solicitado por", "Codigo normalizado", "Articulo", "Descripcion", "Locacion", "Cantidad", "Responsable", "Observaciones"]
     if df.empty:
         return pd.DataFrame(columns=columnas)
     salida = df.rename(
         columns={
+            "remito_num": "Remito",
             "fecha_hora": "Fecha/Hora",
+            "solicitado_por": "Solicitado por",
             "codigo_normalizado": "Codigo normalizado",
             "articulo": "Articulo",
             "descripcion": "Descripcion",
@@ -1261,6 +1276,69 @@ def mostrar_salidas_polo(df: pd.DataFrame) -> pd.DataFrame:
     )
     salida["Cantidad"] = salida["Cantidad"].apply(formatear_numero)
     return salida[columnas]
+
+
+def generar_remito_salida_html(salida: dict) -> bytes:
+    remito = str(salida.get("remito_num", "")).strip() or f"R{int(salida.get('salida_id', 0) or 0):06d}"
+    fecha = str(salida.get("fecha_hora", "")).strip()
+    solicitado = str(salida.get("solicitado_por", "")).strip()
+    responsable = str(salida.get("responsable", "")).strip()
+    articulo = str(salida.get("articulo", "")).strip()
+    descripcion = str(salida.get("descripcion", "")).strip()
+    codigo = str(salida.get("codigo_normalizado", "")).strip()
+    ubicacion = str(salida.get("ubicacion", "")).strip()
+    cantidad = formatear_numero(salida.get("cantidad", 0))
+    observaciones = str(salida.get("observaciones", "")).strip()
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Remito {remito}</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 32px; color: #111827; }}
+    .head {{ display: flex; justify-content: space-between; border-bottom: 2px solid #111827; padding-bottom: 12px; margin-bottom: 24px; }}
+    h1 {{ margin: 0; font-size: 28px; }}
+    .meta {{ text-align: right; font-size: 14px; line-height: 1.5; }}
+    .box {{ border: 1px solid #d1d5db; padding: 14px; margin-bottom: 18px; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
+    th, td {{ border: 1px solid #d1d5db; padding: 9px; text-align: left; font-size: 13px; }}
+    th {{ background: #f3f4f6; }}
+    .firmas {{ display: grid; grid-template-columns: 1fr 1fr; gap: 60px; margin-top: 70px; }}
+    .firma {{ border-top: 1px solid #111827; padding-top: 8px; text-align: center; }}
+  </style>
+</head>
+<body>
+  <div class="head">
+    <div>
+      <h1>Remito de salida Polo</h1>
+      <div>Deposito origen: POLO LOGISTICO</div>
+      <div>Destino: DARKINEL / solicitante</div>
+    </div>
+    <div class="meta">
+      <strong>Remito:</strong> {remito}<br>
+      <strong>Fecha:</strong> {fecha}
+    </div>
+  </div>
+  <div class="box">
+    <strong>Solicitado por Darkinel:</strong> {solicitado or "-"}<br>
+    <strong>Responsable entrega:</strong> {responsable or "-"}<br>
+    <strong>Observaciones:</strong> {observaciones or "-"}
+  </div>
+  <table>
+    <thead>
+      <tr><th>Codigo</th><th>Articulo</th><th>Descripcion</th><th>Locacion Polo</th><th>Cantidad</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>{codigo}</td><td>{articulo}</td><td>{descripcion}</td><td>{ubicacion}</td><td>{cantidad}</td></tr>
+    </tbody>
+  </table>
+  <div class="firmas">
+    <div class="firma">Firma entrega Polo</div>
+    <div class="firma">Firma recibe / solicita Darkinel</div>
+  </div>
+</body>
+</html>"""
+    return html.encode("utf-8")
 
 
 def aplicar_salidas_a_ubicaciones(ubicaciones: pd.DataFrame, salidas: pd.DataFrame) -> pd.DataFrame:
@@ -1483,6 +1561,9 @@ def inicializar_estado() -> None:
     if "salida_seq" not in st.session_state:
         estado_salidas = cargar_salidas_polo_db()
         st.session_state.salida_seq = int(estado_salidas.get("salida_seq", 0) or 0)
+    if "remito_seq" not in st.session_state:
+        estado_salidas = cargar_salidas_polo_db()
+        st.session_state.remito_seq = int(estado_salidas.get("remito_seq", estado_salidas.get("salida_seq", 0)) or 0)
 
     # MigraciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n automÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡tica: si la sesiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n venÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­a de una versiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n anterior,
     # convertimos bultos_pallet/bultos_item a cantidad_bultos/ubicacion.
@@ -3635,34 +3716,71 @@ with tab_salidas:
                     idx_sel = opciones_txt.index(seleccion)
                     fila_sel = opciones_polo.reset_index(drop=True).iloc[idx_sel]
                     disponible = float(fila_sel["cantidad_num"])
+                    proximo_remito = f"R{int(st.session_state.get('remito_seq', 0) or 0) + 1:06d}"
+                    st.caption(f"Proximo remito: {proximo_remito}")
                     with st.form("form_salida_polo"):
-                        c1, c2, c3 = st.columns(3)
+                        c1, c2, c3, c4 = st.columns([1, 1.3, 1.3, 1.6])
                         cantidad_salida = c1.number_input("Cantidad a descontar", min_value=1.0, max_value=max(disponible, 1.0), value=1.0, step=1.0)
-                        responsable = c2.text_input("Responsable", placeholder="Nombre")
-                        observaciones = c3.text_input("Observaciones", placeholder="Venta / salida / ajuste")
-                        guardar_salida = st.form_submit_button("Descontar de esta locacion", type="primary")
+                        solicitado_por = c2.text_input("Solicitado por Darkinel", placeholder="Nombre")
+                        responsable = c3.text_input("Responsable entrega", placeholder="Nombre")
+                        observaciones = c4.text_input("Observaciones", placeholder="Venta / salida / ajuste")
+                        guardar_salida = st.form_submit_button(f"Generar remito {proximo_remito} y descontar", type="primary")
 
                     if guardar_salida:
+                        solicitado_por = str(solicitado_por).strip()
+                        responsable = str(responsable).strip()
+                        if not solicitado_por:
+                            st.error("Informa quien solicita desde Darkinel antes de generar el remito.")
+                            st.stop()
                         st.session_state.salida_seq = int(st.session_state.get("salida_seq", 0) or 0) + 1
-                        st.session_state.salidas_polo.append(
-                            {
-                                "salida_id": st.session_state.salida_seq,
-                                "fecha_hora": ahora_texto(),
-                                "codigo_normalizado": fila_sel["codigo_normalizado"],
-                                "articulo": fila_sel["articulo"],
-                                "descripcion": fila_sel["descripcion"],
-                                "ubicacion": fila_sel["ubicacion"],
-                                "cantidad": float(cantidad_salida),
-                                "responsable": responsable,
-                                "observaciones": observaciones,
-                            }
-                        )
+                        st.session_state.remito_seq = int(st.session_state.get("remito_seq", 0) or 0) + 1
+                        remito_num = f"R{st.session_state.remito_seq:06d}"
+                        salida_registro = {
+                            "salida_id": st.session_state.salida_seq,
+                            "remito_num": remito_num,
+                            "fecha_hora": ahora_texto(),
+                            "solicitado_por": solicitado_por,
+                            "codigo_normalizado": fila_sel["codigo_normalizado"],
+                            "articulo": fila_sel["articulo"],
+                            "descripcion": fila_sel["descripcion"],
+                            "ubicacion": fila_sel["ubicacion"],
+                            "cantidad": float(cantidad_salida),
+                            "responsable": responsable,
+                            "observaciones": observaciones,
+                        }
+                        st.session_state.salidas_polo.append(salida_registro)
+                        st.session_state.ultimo_remito_salida = salida_registro
                         guardar_salidas_polo_db()
-                        st.success(f"Salida registrada. Se desconto {formatear_numero(cantidad_salida)} de {fila_sel['ubicacion']}.")
+                        st.success(f"Remito {remito_num} generado. Se desconto {formatear_numero(cantidad_salida)} de {fila_sel['ubicacion']}.")
                         st.rerun()
 
     st.subheader("Historial de salidas Polo")
-    st.dataframe(limpiar_df_visible(mostrar_salidas_polo(salidas_polo_actual)), use_container_width=True, hide_index=True)
+    salidas_historial = salidas_polo_df()
+    ultimo_remito = st.session_state.get("ultimo_remito_salida")
+    if isinstance(ultimo_remito, dict) and ultimo_remito:
+        ultimo_num = str(ultimo_remito.get("remito_num", "")).strip()
+        st.download_button(
+            f"Descargar ultimo remito {ultimo_num}",
+            data=generar_remito_salida_html(ultimo_remito),
+            file_name=f"remito_{ultimo_num or 'salida_polo'}.html",
+            mime="text/html",
+        )
+    if not salidas_historial.empty:
+        remitos_opciones = [
+            f"{r.remito_num} | {r.fecha_hora} | {r.articulo} | {r.ubicacion} | {formatear_numero(r.cantidad)}"
+            for r in salidas_historial.sort_values("salida_id", ascending=False).itertuples()
+        ]
+        salidas_ordenadas = salidas_historial.sort_values("salida_id", ascending=False).reset_index(drop=True)
+        remito_elegido = st.selectbox("Remito para imprimir o descargar", remitos_opciones, key="remito_salida_select")
+        remito_row = salidas_ordenadas.iloc[remitos_opciones.index(remito_elegido)].to_dict()
+        remito_num = str(remito_row.get("remito_num", "")).strip()
+        st.download_button(
+            "Descargar remito seleccionado",
+            data=generar_remito_salida_html(remito_row),
+            file_name=f"remito_{remito_num or 'salida_polo'}.html",
+            mime="text/html",
+        )
+    st.dataframe(limpiar_df_visible(mostrar_salidas_polo(salidas_historial)), use_container_width=True, hide_index=True)
 
 with tab_bases:
     st.subheader("STOCK_DARKINEL_ACTUALIZADO")
