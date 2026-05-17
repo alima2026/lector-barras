@@ -2755,6 +2755,21 @@ def limpiar_mudanza_actual() -> None:
     guardar_mudanza_actual_db(fusionar_con_nube=False)
 
 
+def clave_admin_configurada() -> str:
+    for clave in ("ADMIN_PASSWORD", "admin_password", "CLAVE_ADMIN", "clave_admin"):
+        try:
+            valor = st.secrets.get(clave, "")
+        except Exception:
+            valor = ""
+        if str(valor).strip():
+            return str(valor).strip()
+    return "magna2026"
+
+
+def admin_habilitado() -> bool:
+    return bool(st.session_state.get("admin_habilitado", False))
+
+
 # -----------------------------
 # Interfaz
 # -----------------------------
@@ -2850,10 +2865,26 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    if st.button("Vaciar mudanza actual", type="secondary"):
-        limpiar_mudanza_actual()
-        st.success("Mudanza actual vaciada.")
-        st.rerun()
+    with st.expander("Administracion", expanded=False):
+        if not admin_habilitado():
+            clave_admin = st.text_input("Clave de administrador", type="password", key="clave_admin_input")
+            if st.button("Entrar", key="entrar_admin"):
+                if str(clave_admin).strip() == clave_admin_configurada():
+                    st.session_state.admin_habilitado = True
+                    st.success("Modo administrador habilitado.")
+                    st.rerun()
+                else:
+                    st.error("Clave incorrecta.")
+        else:
+            st.success("Modo administrador habilitado")
+            if st.button("Salir del modo administrador", key="salir_admin"):
+                st.session_state.admin_habilitado = False
+                st.rerun()
+            st.warning("Acciones delicadas")
+            if st.button("Vaciar mudanza actual", type="secondary", key="vaciar_mudanza_admin"):
+                limpiar_mudanza_actual()
+                st.success("Mudanza actual vaciada.")
+                st.rerun()
 
     st.caption(f"Base de avance: {fecha_estado_db('mudanza_actual') or 'sin guardado'}")
 
