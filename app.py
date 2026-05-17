@@ -316,6 +316,23 @@ def cargar_salidas_polo_db() -> Dict[str, object]:
     return estado
 
 
+def guardar_conteo_darkinel_db() -> None:
+    guardar_estado_db(
+        "conteo_darkinel",
+        {
+            "conteos": st.session_state.get("conteo_darkinel", []),
+        },
+    )
+
+
+def cargar_conteo_darkinel_db() -> Dict[str, object]:
+    estado = cargar_estado_db("conteo_darkinel", {"conteos": []})
+    if not isinstance(estado, dict):
+        return {"conteos": []}
+    estado.setdefault("conteos", [])
+    return estado
+
+
 def cargar_mudanza_actual_db() -> Dict[str, object]:
     estado = cargar_estado_db("mudanza_actual", {"pick_items": [], "pick_seq": 0})
     if not isinstance(estado, dict):
@@ -1256,6 +1273,40 @@ def salidas_polo_df() -> pd.DataFrame:
     return df[columnas]
 
 
+def conteo_darkinel_df() -> pd.DataFrame:
+    columnas = ["codigo_normalizado", "articulo", "descripcion", "ubicacion", "cantidad_contada", "contado_por", "fecha_hora", "observaciones"]
+    df = pd.DataFrame(st.session_state.get("conteo_darkinel", []))
+    if df.empty:
+        return pd.DataFrame(columns=columnas)
+    for col in columnas:
+        if col not in df.columns:
+            df[col] = "" if col != "cantidad_contada" else 0
+    df["codigo_normalizado"] = df["codigo_normalizado"].map(normalizar_codigo)
+    df["ubicacion"] = df["ubicacion"].fillna("").astype(str).str.strip().str.upper()
+    df.loc[df["ubicacion"].eq(""), "ubicacion"] = "SIN LOCACION"
+    df["cantidad_contada"] = pd.to_numeric(df["cantidad_contada"], errors="coerce").fillna(0)
+    df["fecha_hora"] = df["fecha_hora"].fillna("").astype(str)
+    df = df[df["codigo_normalizado"].astype(str).str.strip() != ""].copy()
+    if df.empty:
+        return pd.DataFrame(columns=columnas)
+    df = df.sort_values("fecha_hora").drop_duplicates(["codigo_normalizado", "ubicacion"], keep="last")
+    return df[columnas].reset_index(drop=True)
+
+
+def conteo_darkinel_resumen_df() -> pd.DataFrame:
+    conteo = conteo_darkinel_df()
+    if conteo.empty:
+        return pd.DataFrame(columns=["codigo_normalizado", "cantidad_contada", "ubicaciones_darkinel"])
+    resumen = (
+        conteo.groupby("codigo_normalizado", as_index=False)
+        .agg(
+            cantidad_contada=("cantidad_contada", "sum"),
+            ubicaciones_darkinel=("ubicacion", lambda s: " / ".join(dict.fromkeys(str(x).strip().upper() for x in s if str(x).strip()))),
+        )
+    )
+    return resumen
+
+
 def mostrar_salidas_polo(df: pd.DataFrame) -> pd.DataFrame:
     columnas = ["Remito", "Fecha/Hora", "Solicitado por", "Codigo normalizado", "Articulo", "Descripcion", "Locacion", "Cantidad", "Responsable", "Observaciones"]
     if df.empty:
@@ -1564,6 +1615,9 @@ def inicializar_estado() -> None:
     if "remito_seq" not in st.session_state:
         estado_salidas = cargar_salidas_polo_db()
         st.session_state.remito_seq = int(estado_salidas.get("remito_seq", estado_salidas.get("salida_seq", 0)) or 0)
+    if "conteo_darkinel" not in st.session_state:
+        estado_conteo = cargar_conteo_darkinel_db()
+        st.session_state.conteo_darkinel = estado_conteo.get("conteos", [])
 
     # MigraciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n automÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡tica: si la sesiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n venÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­a de una versiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n anterior,
     # convertimos bultos_pallet/bultos_item a cantidad_bultos/ubicacion.
@@ -2247,7 +2301,8 @@ def balance_darkinel_polo(
 ) -> pd.DataFrame:
     columnas = [
         "Codigo normalizado", "Articulo", "Descripcion", "Stock original Darkinel", "Enviado a Polo",
-        "Salido desde Polo", "Disponible en Polo", "Restante en Darkinel", "Locacion Darkinel", "Control",
+        "Salido desde Polo", "Disponible en Polo", "Restante esperado Darkinel", "Conteo fisico Darkinel",
+        "Diferencia conteo", "Ajuste sugerido", "Locacion Darkinel", "Control",
     ]
     partes = []
 
@@ -2341,16 +2396,52 @@ def balance_darkinel_polo(
             balance[col] = ""
         balance[col] = balance[col].fillna("").astype(str).str.strip()
 
-    balance["Restante en Darkinel"] = (balance["Stock original Darkinel"] - balance["Enviado a Polo"]).clip(lower=0)
-    balance["Locacion Darkinel"] = balance["Restante en Darkinel"].apply(lambda x: "SIN LOCACION REGISTRADA" if float(x or 0) > 0 else "")
+    conteo = conteo_darkinel_resumen_df()
+    if not conteo.empty:
+        conteo = conteo.rename(
+            columns={
+                "codigo_normalizado": "Codigo normalizado",
+                "cantidad_contada": "Conteo fisico Darkinel",
+                "ubicaciones_darkinel": "Locaciones contadas Darkinel",
+            }
+        )
+        conteo["Codigo normalizado"] = conteo["Codigo normalizado"].map(normalizar_codigo)
+        balance = balance.merge(conteo[["Codigo normalizado", "Conteo fisico Darkinel", "Locaciones contadas Darkinel"]], on="Codigo normalizado", how="left")
+    else:
+        balance["Conteo fisico Darkinel"] = pd.NA
+        balance["Locaciones contadas Darkinel"] = ""
+
+    balance["Restante esperado Darkinel"] = (balance["Stock original Darkinel"] - balance["Enviado a Polo"]).clip(lower=0)
+    balance["Conteo fisico Darkinel"] = pd.to_numeric(balance["Conteo fisico Darkinel"], errors="coerce")
+    balance["Diferencia conteo"] = balance["Conteo fisico Darkinel"] - balance["Restante esperado Darkinel"]
+
+    def ajuste_sugerido(diff) -> str:
+        if pd.isna(diff):
+            return "Pendiente de conteo"
+        diff = float(diff)
+        if diff > 0:
+            return f"ALTA {formatear_numero(diff)}"
+        if diff < 0:
+            return f"BAJA {formatear_numero(abs(diff))}"
+        return "OK"
+
+    balance["Ajuste sugerido"] = balance["Diferencia conteo"].apply(ajuste_sugerido)
+    balance["Locaciones contadas Darkinel"] = balance["Locaciones contadas Darkinel"].fillna("").astype(str).str.strip()
+    balance["Locacion Darkinel"] = balance["Locaciones contadas Darkinel"]
+    balance.loc[
+        balance["Locacion Darkinel"].eq("") & (balance["Restante esperado Darkinel"] > 0),
+        "Locacion Darkinel",
+    ] = "SIN LOCACION REGISTRADA"
     balance["Control"] = "OK"
     balance.loc[balance["Enviado a Polo"] > balance["Stock original Darkinel"], "Control"] = "REVISAR: enviado a Polo mayor al stock original"
     balance.loc[(balance["Stock original Darkinel"] <= 0) & (balance["Enviado a Polo"] > 0), "Control"] = "Articulo manual/no estaba en stock original"
     balance.loc[(balance["Enviado a Polo"] > 0) & (balance["Disponible en Polo"] <= 0) & (balance["Salido desde Polo"] <= 0), "Control"] = "REVISAR: enviado a Polo sin stock disponible"
+    balance.loc[balance["Diferencia conteo"] > 0, "Control"] = "REVISAR: conteo Darkinel mayor al esperado"
+    balance.loc[balance["Diferencia conteo"] < 0, "Control"] = "REVISAR: conteo Darkinel menor al esperado"
 
     balance = balance[balance["Codigo normalizado"].fillna("").astype(str).str.strip() != ""].copy()
     balance = balance.sort_values(["Control", "Articulo", "Codigo normalizado"]).reset_index(drop=True)
-    for col in ["Stock original Darkinel", "Enviado a Polo", "Salido desde Polo", "Disponible en Polo", "Restante en Darkinel"]:
+    for col in ["Stock original Darkinel", "Enviado a Polo", "Salido desde Polo", "Disponible en Polo", "Restante esperado Darkinel", "Conteo fisico Darkinel", "Diferencia conteo"]:
         balance[col] = balance[col].apply(formatear_numero)
     return balance[columnas]
 
@@ -3935,7 +4026,85 @@ with tab_salidas:
 with tab_bases:
     st.subheader("BALANCE_DARKINEL_POLO")
     balance_actual = balance_darkinel_polo(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
-    st.caption("Balance por codigo: stock original de Darkinel, piezas enviadas a Polo, salidas desde Polo y piezas que quedan en Darkinel sin locacion registrada.")
+    st.caption("Balance por codigo: stock original de Darkinel, piezas enviadas a Polo, salidas desde Polo, conteo fisico en Darkinel y ajuste sugerido.")
+    with st.expander("Conteo fisico de piezas que quedan en Darkinel", expanded=False):
+        st.caption("Escanea o digita el codigo, informa la locacion en Darkinel, conta las piezas reales y guarda el conteo. Si el articulo esta en mas de una locacion, cargalo una vez por cada locacion.")
+        codigo_conteo = st.text_input("Codigo contado en Darkinel", placeholder="Ej: PE01-14-302", key="codigo_conteo_darkinel")
+        codigo_norm_conteo = normalizar_codigo(codigo_conteo) if codigo_conteo else ""
+        ubicacion_conteo = st.text_input("Locacion Darkinel", placeholder="Ej: D-01-03", key="ubicacion_conteo_darkinel").strip().upper()
+        ubicacion_clave_conteo = ubicacion_conteo or "SIN LOCACION"
+        fila_balance_conteo = pd.DataFrame()
+        if codigo_norm_conteo:
+            fila_balance_conteo = balance_actual[balance_actual["Codigo normalizado"].astype(str).map(normalizar_codigo).eq(codigo_norm_conteo)].copy()
+            if fila_balance_conteo.empty:
+                sugerencias_conteo = balance_actual[
+                    balance_actual["Codigo normalizado"].astype(str).str.contains(codigo_norm_conteo[:6], case=False, na=False)
+                    | balance_actual["Articulo"].astype(str).str.upper().str.contains(str(codigo_conteo).strip().upper()[:6], na=False)
+                ].head(10)
+                if sugerencias_conteo.empty:
+                    st.warning("No encontre ese codigo en el balance. Revisalo antes de guardar el conteo.")
+                else:
+                    st.info("No encontre coincidencia exacta. Estas son posibles referencias.")
+                    st.dataframe(limpiar_df_visible(sugerencias_conteo), use_container_width=True, hide_index=True)
+            else:
+                st.dataframe(
+                    limpiar_df_visible(fila_balance_conteo[["Codigo normalizado", "Articulo", "Descripcion", "Restante esperado Darkinel", "Conteo fisico Darkinel", "Ajuste sugerido"]]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        conteos_actuales = conteo_darkinel_df()
+        conteo_previo = 0.0
+        if codigo_norm_conteo and not conteos_actuales.empty:
+            previos = conteos_actuales[
+                conteos_actuales["codigo_normalizado"].eq(codigo_norm_conteo)
+                & conteos_actuales["ubicacion"].eq(ubicacion_clave_conteo)
+            ]
+            if not previos.empty:
+                conteo_previo = float(previos.iloc[0]["cantidad_contada"])
+
+        with st.form("form_conteo_darkinel"):
+            c1, c2, c3 = st.columns([1, 1.2, 2])
+            cantidad_contada = c1.number_input("Piezas contadas en Darkinel", min_value=0.0, value=float(conteo_previo), step=1.0)
+            contado_por = c2.text_input("Contado por", placeholder="Nombre")
+            obs_conteo = c3.text_input("Observaciones", placeholder="Opcional")
+            guardar_conteo = st.form_submit_button("Guardar conteo Darkinel", type="primary")
+
+        if guardar_conteo:
+            if not codigo_norm_conteo:
+                st.error("Escanea o digita un codigo antes de guardar el conteo.")
+                st.stop()
+            articulo_conteo = str(codigo_conteo).strip().upper()
+            descripcion_conteo = ""
+            if not fila_balance_conteo.empty:
+                articulo_conteo = str(fila_balance_conteo.iloc[0].get("Articulo", articulo_conteo)).strip()
+                descripcion_conteo = str(fila_balance_conteo.iloc[0].get("Descripcion", "")).strip()
+            registro_conteo = {
+                "codigo_normalizado": codigo_norm_conteo,
+                "articulo": articulo_conteo,
+                "descripcion": descripcion_conteo,
+                "ubicacion": ubicacion_clave_conteo,
+                "cantidad_contada": float(cantidad_contada),
+                "contado_por": str(contado_por).strip(),
+                "fecha_hora": ahora_texto(),
+                "observaciones": str(obs_conteo).strip(),
+            }
+            st.session_state.conteo_darkinel = [
+                item for item in st.session_state.get("conteo_darkinel", [])
+                if not (
+                    normalizar_codigo(item.get("codigo_normalizado", "")) == codigo_norm_conteo
+                    and str(item.get("ubicacion", "") or "SIN LOCACION").strip().upper() == ubicacion_clave_conteo
+                )
+            ]
+            st.session_state.conteo_darkinel.append(registro_conteo)
+            guardar_conteo_darkinel_db()
+            st.success(f"Conteo guardado para {articulo_conteo} en {ubicacion_clave_conteo}: {formatear_numero(cantidad_contada)} pieza(s).")
+            st.rerun()
+
+        if not conteos_actuales.empty:
+            st.markdown("**Ultimos conteos guardados**")
+            st.dataframe(limpiar_df_visible(conteos_actuales.sort_values("fecha_hora", ascending=False)), use_container_width=True, hide_index=True)
+
     st.dataframe(limpiar_df_visible(balance_actual), use_container_width=True, hide_index=True)
 
     st.subheader("STOCK_DARKINEL_ACTUALIZADO")
