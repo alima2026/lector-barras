@@ -2238,6 +2238,123 @@ def stock_polo_actualizado(df_pick: pd.DataFrame, stock_polo_anterior: pd.DataFr
     return res[["ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo", "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n", "Stock total Polo", "CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado"]]
 
 
+def balance_darkinel_polo(
+    stock_consolidado: pd.DataFrame,
+    df_pick: pd.DataFrame,
+    stock_polo_anterior: pd.DataFrame,
+    ubicaciones_anteriores: pd.DataFrame | None = None,
+    salidas: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    columnas = [
+        "Codigo normalizado", "Articulo", "Descripcion", "Stock original Darkinel", "Enviado a Polo",
+        "Salido desde Polo", "Disponible en Polo", "Restante en Darkinel", "Locacion Darkinel", "Control",
+    ]
+    partes = []
+
+    if stock_consolidado is not None and not stock_consolidado.empty:
+        base = stock_consolidado.copy()
+        base["codigo_normalizado"] = base["codigo_normalizado"].map(normalizar_codigo)
+        base["stock_original_darkinel"] = pd.to_numeric(base["cantidad"], errors="coerce").fillna(0)
+        partes.append(
+            base[["codigo_normalizado", "articulo", "descripcion", "stock_original_darkinel"]].rename(
+                columns={
+                    "codigo_normalizado": "Codigo normalizado",
+                    "articulo": "Articulo",
+                    "descripcion": "Descripcion",
+                    "stock_original_darkinel": "Stock original Darkinel",
+                }
+            )
+        )
+
+    if df_pick is not None and not df_pick.empty:
+        trabajo = normalizar_df_pick(df_pick)
+        trabajo["cantidad_mudada"] = pd.to_numeric(trabajo["cantidad_mudada"], errors="coerce").fillna(0)
+        trabajo["stock_total"] = pd.to_numeric(trabajo["stock_total"], errors="coerce").fillna(0)
+        manual = (
+            trabajo.groupby("codigo_normalizado", as_index=False)
+            .agg(
+                articulo=("articulo", _primer_valor_no_vacio),
+                descripcion=("descripcion", _primer_valor_no_vacio),
+                stock_original_darkinel=("stock_total", "max"),
+            )
+            .rename(
+                columns={
+                    "codigo_normalizado": "Codigo normalizado",
+                    "articulo": "Articulo",
+                    "descripcion": "Descripcion",
+                    "stock_original_darkinel": "Stock original Darkinel",
+                }
+            )
+        )
+        partes.append(manual)
+
+    if partes:
+        balance = pd.concat(partes, ignore_index=True)
+        balance["Codigo normalizado"] = balance["Codigo normalizado"].map(normalizar_codigo)
+        balance["Stock original Darkinel"] = pd.to_numeric(balance["Stock original Darkinel"], errors="coerce").fillna(0)
+        balance = (
+            balance.sort_values("Stock original Darkinel", ascending=False)
+            .groupby("Codigo normalizado", as_index=False)
+            .agg(
+                Articulo=("Articulo", _primer_valor_no_vacio),
+                Descripcion=("Descripcion", _primer_valor_no_vacio),
+                **{"Stock original Darkinel": ("Stock original Darkinel", "max")},
+            )
+        )
+    else:
+        balance = pd.DataFrame(columns=["Codigo normalizado", "Articulo", "Descripcion", "Stock original Darkinel"])
+
+    mudado = mudado_por_codigo(df_pick if df_pick is not None else pd.DataFrame()).rename(
+        columns={"codigo_normalizado": "Codigo normalizado", "mudado_al_polo": "Enviado a Polo"}
+    )
+    if not mudado.empty:
+        mudado["Codigo normalizado"] = mudado["Codigo normalizado"].map(normalizar_codigo)
+        balance = balance.merge(mudado, on="Codigo normalizado", how="outer")
+    else:
+        balance["Enviado a Polo"] = 0
+
+    polo = limpiar_df_visible(stock_polo_actualizado(df_pick, stock_polo_anterior, ubicaciones_anteriores, salidas))
+    if polo is not None and not polo.empty and "Codigo normalizado" in polo.columns:
+        polo_tmp = polo.copy()
+        polo_tmp["Codigo normalizado"] = polo_tmp["Codigo normalizado"].map(normalizar_codigo)
+        polo_tmp["Disponible en Polo"] = polo_tmp["Stock total Polo"].apply(numero_seguro)
+        polo_tmp = polo_tmp[["Codigo normalizado", "Disponible en Polo"]].groupby("Codigo normalizado", as_index=False).sum()
+        balance = balance.merge(polo_tmp, on="Codigo normalizado", how="outer")
+    else:
+        balance["Disponible en Polo"] = 0
+
+    sal = salidas_polo_df() if salidas is None else salidas.copy()
+    if sal is not None and not sal.empty:
+        sal["Codigo normalizado"] = sal["codigo_normalizado"].map(normalizar_codigo)
+        sal["Salido desde Polo"] = pd.to_numeric(sal["cantidad"], errors="coerce").fillna(0)
+        sal = sal[["Codigo normalizado", "Salido desde Polo"]].groupby("Codigo normalizado", as_index=False).sum()
+        balance = balance.merge(sal, on="Codigo normalizado", how="outer")
+    else:
+        balance["Salido desde Polo"] = 0
+
+    for col in ["Stock original Darkinel", "Enviado a Polo", "Salido desde Polo", "Disponible en Polo"]:
+        if col not in balance.columns:
+            balance[col] = 0
+        balance[col] = pd.to_numeric(balance[col], errors="coerce").fillna(0)
+    for col in ["Articulo", "Descripcion"]:
+        if col not in balance.columns:
+            balance[col] = ""
+        balance[col] = balance[col].fillna("").astype(str).str.strip()
+
+    balance["Restante en Darkinel"] = (balance["Stock original Darkinel"] - balance["Enviado a Polo"]).clip(lower=0)
+    balance["Locacion Darkinel"] = balance["Restante en Darkinel"].apply(lambda x: "SIN LOCACION REGISTRADA" if float(x or 0) > 0 else "")
+    balance["Control"] = "OK"
+    balance.loc[balance["Enviado a Polo"] > balance["Stock original Darkinel"], "Control"] = "REVISAR: enviado a Polo mayor al stock original"
+    balance.loc[(balance["Stock original Darkinel"] <= 0) & (balance["Enviado a Polo"] > 0), "Control"] = "Articulo manual/no estaba en stock original"
+    balance.loc[(balance["Enviado a Polo"] > 0) & (balance["Disponible en Polo"] <= 0) & (balance["Salido desde Polo"] <= 0), "Control"] = "REVISAR: enviado a Polo sin stock disponible"
+
+    balance = balance[balance["Codigo normalizado"].fillna("").astype(str).str.strip() != ""].copy()
+    balance = balance.sort_values(["Control", "Articulo", "Codigo normalizado"]).reset_index(drop=True)
+    for col in ["Stock original Darkinel", "Enviado a Polo", "Salido desde Polo", "Disponible en Polo", "Restante en Darkinel"]:
+        balance[col] = balance[col].apply(formatear_numero)
+    return balance[columnas]
+
+
 def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.DataFrame) -> pd.DataFrame:
     columnas = [
         "Fecha/Hora", "Deposito origen", "Deposito destino", "Pallet", "Cantidad de cajas", "Ubicacion",
@@ -2386,6 +2503,7 @@ def generar_excel_control(
     detalle = limpiar_df_visible(preparar_detalle_mudanza(df_pick))
     recepcion = limpiar_df_visible(preparar_recepcion_polo(df_pick))
     salidas_export = limpiar_df_visible(mostrar_salidas_polo(salidas_polo_df() if salidas_polo is None else salidas_polo))
+    balance = limpiar_df_visible(balance_darkinel_polo(stock_consolidado, df_pick, stock_polo_anterior, ubicaciones_anteriores, salidas_polo))
 
     resumen_depositos = pd.DataFrame(
         [
@@ -2408,6 +2526,7 @@ def generar_excel_control(
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         darkinel.to_excel(writer, index=False, sheet_name="STOCK_DARKINEL_ACTUALIZADO")
         polo.to_excel(writer, index=False, sheet_name="STOCK_POLO_LOGISTICO")
+        balance.to_excel(writer, index=False, sheet_name="BALANCE_DARKINEL_POLO")
         ubicacion.to_excel(writer, index=False, sheet_name="UBICACION_POLO_LOGISTICO")
         historial.to_excel(writer, index=False, sheet_name="HISTORIAL_MUDANZAS")
         salidas_export.to_excel(writer, index=False, sheet_name="SALIDAS_POLO")
@@ -3814,6 +3933,11 @@ with tab_salidas:
     st.dataframe(limpiar_df_visible(mostrar_salidas_polo(salidas_historial)), use_container_width=True, hide_index=True)
 
 with tab_bases:
+    st.subheader("BALANCE_DARKINEL_POLO")
+    balance_actual = balance_darkinel_polo(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
+    st.caption("Balance por codigo: stock original de Darkinel, piezas enviadas a Polo, salidas desde Polo y piezas que quedan en Darkinel sin locacion registrada.")
+    st.dataframe(limpiar_df_visible(balance_actual), use_container_width=True, hide_index=True)
+
     st.subheader("STOCK_DARKINEL_ACTUALIZADO")
     darkinel_actual = stock_darkinel_actualizado(stock_consolidado, df_operativo)
     st.dataframe(limpiar_df_visible(darkinel_actual), use_container_width=True, hide_index=True)
