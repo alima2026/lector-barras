@@ -1942,7 +1942,7 @@ def pick_items_df() -> pd.DataFrame:
     df = pd.DataFrame(st.session_state.pick_items)
     if df.empty:
         return df
-    df = normalizar_df_pick(df)
+    df = canonizar_mudanza_recepcion(df)
     df["piezas_en_caja"] = df.apply(lambda r: piezas_en_caja_de_fila(r), axis=1)
     total_por_codigo = df.groupby("codigo_normalizado")["cantidad_mudada"].transform("sum")
     df["stock_restante_darkinel"] = df["stock_total"] - total_por_codigo
@@ -1970,7 +1970,7 @@ def preparar_detalle_mudanza(df: pd.DataFrame) -> pd.DataFrame:
     ]
     if df.empty:
         return pd.DataFrame(columns=columnas)
-    df = normalizar_df_pick(df)
+    df = canonizar_mudanza_recepcion(df)
     origen = [
         "fecha_hora", "deposito_origen", "deposito_destino", "pallet", "cantidad_bultos", "bulto",
         "piezas_en_caja", "ubicacion", "lectura_scanner", "articulo", "descripcion", "unidad",
@@ -1989,8 +1989,8 @@ def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
     ]
     if df.empty:
         return pd.DataFrame(columns=columnas)
-    trabajo = normalizar_df_pick(df)
-    trabajo = normalizar_df_pick(pd.DataFrame(quitar_placeholders_con_detalle(trabajo.to_dict("records"))))
+    trabajo = canonizar_mudanza_recepcion(df)
+    trabajo = canonizar_mudanza_recepcion(pd.DataFrame(quitar_placeholders_con_detalle(trabajo.to_dict("records"))))
     resumen = (
         trabajo.groupby(["deposito_origen", "deposito_destino", "pallet", "cantidad_bultos"], dropna=False)
         .agg(
@@ -2151,6 +2151,57 @@ def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
 def es_ubicacion_real(valor) -> bool:
     ubicacion = str(valor or "").strip().upper()
     return bool(ubicacion and ubicacion not in ["PENDIENTE", "NAN", "NONE"])
+
+
+def canonizar_mudanza_recepcion(df_pick: pd.DataFrame) -> pd.DataFrame:
+    if df_pick is None or df_pick.empty:
+        return pd.DataFrame()
+    trabajo = normalizar_df_pick(df_pick).copy()
+    trabajo["_orden_original"] = range(len(trabajo))
+    trabajo["_ubicacion_final"] = trabajo["ubicacion_recepcion"].where(
+        trabajo["ubicacion_recepcion"].apply(es_ubicacion_real),
+        trabajo["ubicacion"],
+    )
+    trabajo["_ubicacion_final"] = trabajo["_ubicacion_final"].fillna("").astype(str).str.strip().str.upper()
+    trabajo.loc[~trabajo["_ubicacion_final"].apply(es_ubicacion_real), "_ubicacion_final"] = "PENDIENTE"
+
+    ubicaciones_por_pallet = {}
+    for pallet, grupo in trabajo.groupby("pallet", dropna=False):
+        reales = [
+            str(u).strip().upper()
+            for u in grupo["_ubicacion_final"].tolist()
+            if es_ubicacion_real(u)
+        ]
+        if reales:
+            ubicaciones_por_pallet[pallet] = pd.Series(reales).mode().iloc[0]
+    if ubicaciones_por_pallet:
+        pendientes = ~trabajo["_ubicacion_final"].apply(es_ubicacion_real)
+        trabajo.loc[pendientes, "_ubicacion_final"] = trabajo.loc[pendientes, "pallet"].map(ubicaciones_por_pallet).fillna(trabajo.loc[pendientes, "_ubicacion_final"])
+
+    trabajo["ubicacion"] = trabajo["_ubicacion_final"]
+    trabajo["ubicacion_recepcion"] = trabajo["_ubicacion_final"].where(
+        trabajo["_ubicacion_final"].apply(es_ubicacion_real),
+        trabajo["ubicacion_recepcion"],
+    )
+    trabajo["_ubicacion_real"] = trabajo["_ubicacion_final"].apply(es_ubicacion_real).astype(int)
+    trabajo["_recepcion_ok_orden"] = trabajo["recepcion_ok"].fillna(False).astype(bool).astype(int)
+
+    claves_linea = [
+        "fecha_hora", "deposito_origen", "deposito_destino", "pallet", "cantidad_bultos", "bulto",
+        "lectura_scanner", "articulo", "descripcion",
+        "unidad", "cantidad_mudada", "codigo_normalizado", "observaciones",
+    ]
+    claves_linea = [c for c in claves_linea if c in trabajo.columns]
+    trabajo["_ocurrencia"] = trabajo.groupby(claves_linea + ["_ubicacion_real"], dropna=False).cumcount()
+    claves_unicas = claves_linea + ["_ocurrencia"]
+    trabajo = (
+        trabajo.sort_values(["_ubicacion_real", "_recepcion_ok_orden", "_orden_original"], ascending=[False, False, False])
+        .drop_duplicates(claves_unicas, keep="first")
+        .sort_values("_orden_original")
+        .drop(columns=["_orden_original", "_ubicacion_final", "_ubicacion_real", "_recepcion_ok_orden", "_ocurrencia"], errors="ignore")
+        .reset_index(drop=True)
+    )
+    return normalizar_df_pick(trabajo)
 
 
 def stock_polo_desde_ubicaciones(ubicaciones: pd.DataFrame) -> pd.DataFrame:
@@ -2585,7 +2636,7 @@ def preparar_recepcion_polo(df_pick: pd.DataFrame) -> pd.DataFrame:
     ]
     if df_pick.empty:
         return pd.DataFrame(columns=columnas)
-    trabajo = normalizar_df_pick(df_pick)
+    trabajo = canonizar_mudanza_recepcion(df_pick)
     recepcion = trabajo.copy()
     recepcion["diferencia"] = pd.to_numeric(recepcion["cantidad_recibida"], errors="coerce").fillna(0) - pd.to_numeric(recepcion["cantidad_mudada"], errors="coerce").fillna(0)
     origen = [
