@@ -209,9 +209,12 @@ def fecha_estado_db(clave: str) -> str:
 
 
 def firma_item_mudanza(item: dict) -> str:
+    item_id = str(item.get("item_id", "")).strip()
+    if item_id and item_id != "0":
+        return f"item_id:{item_id}"
     campos = [
         "fecha_hora", "deposito_origen", "deposito_destino", "pallet", "cantidad_bultos", "bulto",
-        "lectura_scanner", "articulo", "descripcion", "cantidad_mudada", "codigo_normalizado", "ubicacion",
+        "lectura_scanner", "articulo", "descripcion", "cantidad_mudada", "codigo_normalizado",
         "observaciones",
     ]
     base = "|".join(str(item.get(c, "")).strip() for c in campos)
@@ -3853,6 +3856,7 @@ with tab_recepcion:
         ubicaciones_reales = [u for u in ubicaciones_existentes.unique().tolist() if u and u not in ["PENDIENTE", "NAN"]]
         ubicacion_sugerida = ubicaciones_reales[0] if len(ubicaciones_reales) == 1 else ""
         ubicacion_pallet = pr2.text_input("Ubicacion unica del pallet", value=ubicacion_sugerida, placeholder="Ej: 1-L-3")
+        ubicacion_pallet_norm = str(ubicacion_pallet).strip().upper()
         receptor_pallet = pr3.text_input("Recibido por", placeholder="Nombre")
 
         recepcion_base = lineas_pallet_recepcion.copy()
@@ -3860,6 +3864,8 @@ with tab_recepcion:
             recepcion_base["ubicacion_recepcion"].astype(str).str.strip() != "",
             recepcion_base["ubicacion"],
         )
+        if ubicacion_pallet_norm:
+            recepcion_base["ubicacion_recepcion"] = ubicacion_pallet_norm
 
         recepcion_editor = recepcion_base[
             [
@@ -3907,7 +3913,7 @@ with tab_recepcion:
         )
 
         if st.button("Guardar recepcion del pallet", type="primary", disabled=usando_control_anterior):
-            if not str(ubicacion_pallet).strip():
+            if not ubicacion_pallet_norm:
                 st.error("Informa la ubicacion del pallet antes de guardar.")
                 st.stop()
             if not bool(recepcion_editada["OK recepcion"].astype(bool).all()):
@@ -3915,17 +3921,17 @@ with tab_recepcion:
                 st.stop()
 
             por_id = {int(item.get("item_id", 0)): item for item in st.session_state.pick_items}
+            filas_editadas = {int(row.get("ID", 0)): row for row in recepcion_editada.to_dict("records")}
             ahora_recepcion = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            for row in recepcion_editada.to_dict("records"):
-                item_id = int(row.get("ID", 0))
-                item = por_id.get(item_id)
-                if not item:
+            for item in st.session_state.pick_items:
+                if int(item.get("pallet", 0) or 0) != int(pallet_recepcion):
                     continue
-                ubicacion_polo = str(ubicacion_pallet).strip().upper()
+                item_id = int(item.get("item_id", 0) or 0)
+                row = filas_editadas.get(item_id, {})
                 item["cantidad_recibida"] = numero_seguro(row.get("Piezas recibidas", row.get("Cantidad recibida", item.get("cantidad_mudada", 0))), 0)
                 item["recepcion_ok"] = True
-                item["ubicacion_recepcion"] = ubicacion_polo
-                item["ubicacion"] = ubicacion_polo
+                item["ubicacion_recepcion"] = ubicacion_pallet_norm
+                item["ubicacion"] = ubicacion_pallet_norm
                 item["receptor"] = str(receptor_pallet).strip()
                 item["fecha_recepcion"] = ahora_recepcion
                 item["observaciones_recepcion"] = str(row.get("Observaciones recepcion", "")).strip()
