@@ -2300,9 +2300,9 @@ def balance_darkinel_polo(
     salidas: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     columnas = [
-        "Codigo normalizado", "Articulo", "Descripcion", "Stock original Darkinel", "Enviado a Polo",
+        "Codigo normalizado", "Articulo", "Descripcion", "Stock Nodum", "Enviado a Polo",
         "Salido desde Polo", "Disponible en Polo", "Restante esperado Darkinel", "Conteo fisico Darkinel",
-        "Diferencia conteo", "Ajuste sugerido", "Locacion Darkinel", "Control",
+        "Total fisico contado", "Diferencia vs Nodum", "Ajuste sugerido", "Locacion Darkinel", "Control",
     ]
     partes = []
 
@@ -2411,13 +2411,15 @@ def balance_darkinel_polo(
         balance["Conteo fisico Darkinel"] = pd.NA
         balance["Locaciones contadas Darkinel"] = ""
 
-    balance["Restante esperado Darkinel"] = (balance["Stock original Darkinel"] - balance["Enviado a Polo"]).clip(lower=0)
+    balance["Restante esperado Darkinel"] = (balance["Stock original Darkinel"] - balance["Disponible en Polo"]).clip(lower=0)
     balance["Conteo fisico Darkinel"] = pd.to_numeric(balance["Conteo fisico Darkinel"], errors="coerce")
-    balance["Diferencia conteo"] = balance["Conteo fisico Darkinel"] - balance["Restante esperado Darkinel"]
+    balance["Total fisico contado"] = balance["Conteo fisico Darkinel"] + balance["Disponible en Polo"]
+    balance.loc[balance["Conteo fisico Darkinel"].isna(), "Total fisico contado"] = pd.NA
+    balance["Diferencia vs Nodum"] = balance["Total fisico contado"] - balance["Stock original Darkinel"]
 
     def ajuste_sugerido(diff) -> str:
         if pd.isna(diff):
-            return "Pendiente de conteo"
+            return "Sin contar Darkinel"
         diff = float(diff)
         if diff > 0:
             return f"ALTA {formatear_numero(diff)}"
@@ -2425,7 +2427,7 @@ def balance_darkinel_polo(
             return f"BAJA {formatear_numero(abs(diff))}"
         return "OK"
 
-    balance["Ajuste sugerido"] = balance["Diferencia conteo"].apply(ajuste_sugerido)
+    balance["Ajuste sugerido"] = balance["Diferencia vs Nodum"].apply(ajuste_sugerido)
     balance["Locaciones contadas Darkinel"] = balance["Locaciones contadas Darkinel"].fillna("").astype(str).str.strip()
     balance["Locacion Darkinel"] = balance["Locaciones contadas Darkinel"]
     balance.loc[
@@ -2433,15 +2435,18 @@ def balance_darkinel_polo(
         "Locacion Darkinel",
     ] = "SIN LOCACION REGISTRADA"
     balance["Control"] = "OK"
-    balance.loc[balance["Enviado a Polo"] > balance["Stock original Darkinel"], "Control"] = "REVISAR: enviado a Polo mayor al stock original"
+    balance.loc[balance["Conteo fisico Darkinel"].isna(), "Control"] = "Sin contar Darkinel"
+    balance.loc[balance["Disponible en Polo"] > balance["Stock original Darkinel"], "Control"] = "REVISAR: Polo mayor que Nodum"
+    balance.loc[balance["Enviado a Polo"] > balance["Stock original Darkinel"], "Control"] = "REVISAR: enviado a Polo mayor al stock Nodum"
     balance.loc[(balance["Stock original Darkinel"] <= 0) & (balance["Enviado a Polo"] > 0), "Control"] = "Articulo manual/no estaba en stock original"
     balance.loc[(balance["Enviado a Polo"] > 0) & (balance["Disponible en Polo"] <= 0) & (balance["Salido desde Polo"] <= 0), "Control"] = "REVISAR: enviado a Polo sin stock disponible"
-    balance.loc[balance["Diferencia conteo"] > 0, "Control"] = "REVISAR: conteo Darkinel mayor al esperado"
-    balance.loc[balance["Diferencia conteo"] < 0, "Control"] = "REVISAR: conteo Darkinel menor al esperado"
+    balance.loc[balance["Diferencia vs Nodum"] > 0, "Control"] = "Sobra fisico: sugerir alta en Nodum"
+    balance.loc[balance["Diferencia vs Nodum"] < 0, "Control"] = "Falta fisico: sugerir baja en Nodum"
 
     balance = balance[balance["Codigo normalizado"].fillna("").astype(str).str.strip() != ""].copy()
     balance = balance.sort_values(["Control", "Articulo", "Codigo normalizado"]).reset_index(drop=True)
-    for col in ["Stock original Darkinel", "Enviado a Polo", "Salido desde Polo", "Disponible en Polo", "Restante esperado Darkinel", "Conteo fisico Darkinel", "Diferencia conteo"]:
+    balance["Stock Nodum"] = balance["Stock original Darkinel"]
+    for col in ["Stock Nodum", "Enviado a Polo", "Salido desde Polo", "Disponible en Polo", "Restante esperado Darkinel", "Conteo fisico Darkinel", "Total fisico contado", "Diferencia vs Nodum"]:
         balance[col] = balance[col].apply(formatear_numero)
     return balance[columnas]
 
@@ -4026,7 +4031,7 @@ with tab_salidas:
 with tab_bases:
     st.subheader("BALANCE_DARKINEL_POLO")
     balance_actual = balance_darkinel_polo(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
-    st.caption("Balance por codigo: stock original de Darkinel, piezas enviadas a Polo, salidas desde Polo, conteo fisico en Darkinel y ajuste sugerido.")
+    st.caption("Balance por codigo: Stock Nodum del dia contra lo real contado: piezas disponibles en Polo + conteo fisico en Darkinel. La diferencia genera alta o baja sugerida.")
     with st.expander("Conteo fisico de piezas que quedan en Darkinel", expanded=False):
         st.caption("Escanea o digita el codigo, informa la locacion en Darkinel, conta las piezas reales y guarda el conteo. Si el articulo esta en mas de una locacion, cargalo una vez por cada locacion.")
         codigo_conteo = st.text_input("Codigo contado en Darkinel", placeholder="Ej: PE01-14-302", key="codigo_conteo_darkinel")
@@ -4048,7 +4053,7 @@ with tab_bases:
                     st.dataframe(limpiar_df_visible(sugerencias_conteo), use_container_width=True, hide_index=True)
             else:
                 st.dataframe(
-                    limpiar_df_visible(fila_balance_conteo[["Codigo normalizado", "Articulo", "Descripcion", "Restante esperado Darkinel", "Conteo fisico Darkinel", "Ajuste sugerido"]]),
+                    limpiar_df_visible(fila_balance_conteo[["Codigo normalizado", "Articulo", "Descripcion", "Stock Nodum", "Disponible en Polo", "Restante esperado Darkinel", "Conteo fisico Darkinel", "Total fisico contado", "Diferencia vs Nodum", "Ajuste sugerido"]]),
                     use_container_width=True,
                     hide_index=True,
                 )
