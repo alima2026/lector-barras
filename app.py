@@ -2496,6 +2496,19 @@ def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.D
     if combinado.empty:
         return pd.DataFrame(columns=columnas)
     ubicacion_upper = combinado["Ubicacion"].astype(str).str.strip().str.upper()
+    ubicaciones_por_pallet = {}
+    for pallet, grupo in combinado.groupby("Pallet", dropna=False):
+        reales = [
+            str(u).strip().upper()
+            for u in grupo["Ubicacion"].tolist()
+            if es_ubicacion_real(u)
+        ]
+        if reales:
+            ubicaciones_por_pallet[pallet] = pd.Series(reales).mode().iloc[0]
+    if ubicaciones_por_pallet:
+        pendientes = ~combinado["Ubicacion"].apply(es_ubicacion_real)
+        combinado.loc[pendientes, "Ubicacion"] = combinado.loc[pendientes, "Pallet"].map(ubicaciones_por_pallet).fillna(combinado.loc[pendientes, "Ubicacion"])
+        ubicacion_upper = combinado["Ubicacion"].astype(str).str.strip().str.upper()
     combinado["_ubicacion_real"] = (~ubicacion_upper.isin(["", "PENDIENTE", "NAN"])).astype(int)
     combinado["_fuente_actual"] = pd.to_numeric(combinado["_fuente_actual"], errors="coerce").fillna(0).astype(int)
     combinado["_orden_original"] = range(len(combinado))
