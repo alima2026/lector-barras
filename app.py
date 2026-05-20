@@ -273,11 +273,73 @@ def fusionar_items_mudanza(items_nube: list, items_locales: list) -> list:
     return quitar_placeholders_con_detalle(fusionados)
 
 
+def max_pallet_items(items: list) -> int:
+    pallets = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            pallet = int(float(item.get("pallet", 0) or 0))
+        except (TypeError, ValueError):
+            pallet = 0
+        if pallet > 0:
+            pallets.append(pallet)
+    return max(pallets or [0])
+
+
+def proximo_pallet_disponible(items: list, pallet_seq: int = 0) -> int:
+    try:
+        seq = int(float(pallet_seq or 0))
+    except (TypeError, ValueError):
+        seq = 0
+    return max(max_pallet_items(items), seq) + 1
+
+
+def sincronizar_mudanza_actual_desde_nube() -> list:
+    pick_items = quitar_placeholders_con_detalle(st.session_state.get("pick_items", []))
+    pick_seq = int(st.session_state.get("pick_seq", 0) or 0)
+    pallet_seq = int(st.session_state.get("pallet_seq", 0) or 0)
+    if nube_disponible():
+        estado_nube = cargar_estado_nube("mudanza_actual", {"pick_items": [], "pick_seq": 0, "pallet_seq": 0})
+        if isinstance(estado_nube, dict):
+            pick_items = fusionar_items_mudanza(estado_nube.get("pick_items", []), pick_items)
+            pick_seq = max(
+                int(estado_nube.get("pick_seq", 0) or 0),
+                pick_seq,
+                max([int(x.get("item_id", 0) or 0) for x in pick_items if isinstance(x, dict)] or [0]),
+            )
+            pallet_seq = max(
+                int(estado_nube.get("pallet_seq", 0) or 0),
+                pallet_seq,
+                max_pallet_items(pick_items),
+            )
+    st.session_state.pick_items = pick_items
+    st.session_state.pick_seq = pick_seq
+    st.session_state.pallet_seq = pallet_seq
+    return pick_items
+
+
+def reservar_pallet_nuevo_mudanza() -> int:
+    pick_items = sincronizar_mudanza_actual_desde_nube()
+    pallet_nuevo = proximo_pallet_disponible(pick_items, st.session_state.get("pallet_seq", 0))
+    st.session_state.pallet_seq = pallet_nuevo
+    guardar_estado_db(
+        "mudanza_actual",
+        {
+            "pick_items": st.session_state.get("pick_items", []),
+            "pick_seq": st.session_state.get("pick_seq", 0),
+            "pallet_seq": pallet_nuevo,
+        },
+    )
+    return pallet_nuevo
+
+
 def guardar_mudanza_actual_db(fusionar_con_nube: bool = True) -> None:
     pick_items = quitar_placeholders_con_detalle(st.session_state.get("pick_items", []))
     pick_seq = st.session_state.get("pick_seq", 0)
+    pallet_seq = int(st.session_state.get("pallet_seq", 0) or 0)
     if fusionar_con_nube and nube_disponible():
-        estado_nube = cargar_estado_nube("mudanza_actual", {"pick_items": [], "pick_seq": 0})
+        estado_nube = cargar_estado_nube("mudanza_actual", {"pick_items": [], "pick_seq": 0, "pallet_seq": 0})
         if isinstance(estado_nube, dict):
             pick_items = fusionar_items_mudanza(estado_nube.get("pick_items", []), pick_items)
             pick_seq = max(
@@ -285,15 +347,23 @@ def guardar_mudanza_actual_db(fusionar_con_nube: bool = True) -> None:
                 int(pick_seq or 0),
                 max([int(x.get("item_id", 0) or 0) for x in pick_items if isinstance(x, dict)] or [0]),
             )
+            pallet_seq = max(
+                int(estado_nube.get("pallet_seq", 0) or 0),
+                int(pallet_seq or 0),
+                max_pallet_items(pick_items),
+            )
             st.session_state.pick_items = pick_items
             st.session_state.pick_seq = pick_seq
+            st.session_state.pallet_seq = pallet_seq
     else:
         st.session_state.pick_items = pick_items
+        st.session_state.pallet_seq = max(pallet_seq, max_pallet_items(pick_items))
     guardar_estado_db(
         "mudanza_actual",
         {
             "pick_items": pick_items,
             "pick_seq": pick_seq,
+            "pallet_seq": st.session_state.get("pallet_seq", pallet_seq),
         },
     )
 
@@ -337,11 +407,12 @@ def cargar_conteo_darkinel_db() -> Dict[str, object]:
 
 
 def cargar_mudanza_actual_db() -> Dict[str, object]:
-    estado = cargar_estado_db("mudanza_actual", {"pick_items": [], "pick_seq": 0})
+    estado = cargar_estado_db("mudanza_actual", {"pick_items": [], "pick_seq": 0, "pallet_seq": 0})
     if not isinstance(estado, dict):
-        return {"pick_items": [], "pick_seq": 0}
+        return {"pick_items": [], "pick_seq": 0, "pallet_seq": 0}
     estado.setdefault("pick_items", [])
     estado.setdefault("pick_seq", 0)
+    estado.setdefault("pallet_seq", max_pallet_items(estado.get("pick_items", [])))
     return estado
 
 
@@ -1603,12 +1674,19 @@ def formulario_agregar_manual(
 # Picking / mudanza / depÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sitos
 # -----------------------------
 def inicializar_estado() -> None:
+    estado_db = None
     if "pick_items" not in st.session_state:
         estado_db = cargar_mudanza_actual_db()
         st.session_state.pick_items = quitar_placeholders_con_detalle(estado_db.get("pick_items", []))
     if "pick_seq" not in st.session_state:
-        estado_db = cargar_mudanza_actual_db()
+        estado_db = estado_db or cargar_mudanza_actual_db()
         st.session_state.pick_seq = int(estado_db.get("pick_seq", 0) or 0)
+    if "pallet_seq" not in st.session_state:
+        estado_db = estado_db or cargar_mudanza_actual_db()
+        st.session_state.pallet_seq = max(
+            int(estado_db.get("pallet_seq", 0) or 0),
+            max_pallet_items(st.session_state.get("pick_items", [])),
+        )
     if "salidas_polo" not in st.session_state:
         estado_salidas = cargar_salidas_polo_db()
         st.session_state.salidas_polo = estado_salidas.get("salidas", [])
@@ -1793,6 +1871,7 @@ def agregar_item_a_mudanza(
             "observaciones_recepcion": "",
         }
     )
+    return True, "Articulo agregado a la mudanza."
     return True, "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo agregado a la mudanza."
 
 
@@ -3034,6 +3113,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
 def limpiar_mudanza_actual() -> None:
     st.session_state.pick_items = []
     st.session_state.pick_seq = 0
+    st.session_state.pallet_seq = 0
     guardar_mudanza_actual_db(fusionar_con_nube=False)
 
 
@@ -3420,6 +3500,7 @@ with tab_buscar:
             agregados = 0
             errores = []
             manual_pendientes = []
+            pallet_varios = None
             for linea in codigos_texto.splitlines():
                 linea = linea.strip()
                 if not linea:
@@ -3459,11 +3540,13 @@ with tab_buscar:
                         }
                     )
                     if agregar_varios:
+                        if pallet_varios is None:
+                            pallet_varios = reservar_pallet_nuevo_mudanza()
                         ok, msg = agregar_item_a_mudanza(
                             lectura_original=linea,
                             row=row,
                             cantidad_mudada=1,
-                            pallet=int(pallet_activo),
+                            pallet=int(pallet_varios),
                             cantidad_bultos=int(cantidad_bultos_activo),
                             bulto=int(bulto_activo),
                             bultos_item=str(bulto_activo),
@@ -3482,7 +3565,7 @@ with tab_buscar:
             st.session_state["lecturas_manual_pendientes"] = list(dict.fromkeys(manual_pendientes))
             if agregar_varios:
                 if agregados:
-                    st.success(f"Agregue {agregados} articulo(s) a la mudanza.")
+                    st.success(f"Agregue {agregados} articulo(s) a la mudanza en el pallet {pallet_varios}.")
                 if errores:
                     st.warning("Algunas lineas no se pudieron agregar:")
                     st.write(errores)
