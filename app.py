@@ -2524,6 +2524,9 @@ def balance_darkinel_polo(
         if col not in balance.columns:
             balance[col] = 0
         balance[col] = pd.to_numeric(balance[col], errors="coerce").fillna(0)
+    balance["Disponible en Polo informado"] = balance["Disponible en Polo"]
+    con_stock_nodum = balance["Stock original Darkinel"] > 0
+    balance.loc[con_stock_nodum, "Disponible en Polo"] = balance.loc[con_stock_nodum, ["Disponible en Polo", "Stock original Darkinel"]].min(axis=1)
     for col in ["Articulo", "Descripcion"]:
         if col not in balance.columns:
             balance[col] = ""
@@ -2568,9 +2571,20 @@ def balance_darkinel_polo(
         "Locacion Darkinel",
     ] = "SIN LOCACION REGISTRADA"
     balance["Control"] = "OK"
-    balance.loc[balance["Conteo fisico Darkinel"].isna(), "Control"] = "Sin contar Darkinel"
-    balance.loc[balance["Disponible en Polo"] > balance["Stock original Darkinel"], "Control"] = "REVISAR: Polo mayor que Nodum"
-    balance.loc[balance["Enviado a Polo"] > balance["Stock original Darkinel"], "Control"] = "REVISAR: enviado a Polo mayor al stock Nodum"
+    sin_conteo = balance["Conteo fisico Darkinel"].isna()
+    balance.loc[sin_conteo & (balance["Restante esperado Darkinel"] > 0), "Control"] = "Sin contar Darkinel"
+    balance.loc[
+        sin_conteo & (balance["Restante esperado Darkinel"] <= 0) & (balance["Disponible en Polo"] > 0),
+        "Control",
+    ] = "OK: stock Nodum ubicado en Polo"
+    balance.loc[
+        (~sin_conteo) & (balance["Disponible en Polo informado"] > balance["Stock original Darkinel"]),
+        "Control",
+    ] = "REVISAR: Polo mayor que Nodum"
+    balance.loc[
+        (~sin_conteo) & (balance["Enviado a Polo"] > balance["Stock original Darkinel"]),
+        "Control",
+    ] = "REVISAR: enviado a Polo mayor al stock Nodum"
     balance.loc[(balance["Stock original Darkinel"] <= 0) & (balance["Enviado a Polo"] > 0), "Control"] = "Articulo manual/no estaba en stock original"
     balance.loc[(balance["Enviado a Polo"] > 0) & (balance["Disponible en Polo"] <= 0) & (balance["Salido desde Polo"] <= 0), "Control"] = "REVISAR: enviado a Polo sin stock disponible"
     balance.loc[balance["Diferencia vs Nodum"] > 0, "Control"] = "Sobra fisico: sugerir alta en Nodum"
