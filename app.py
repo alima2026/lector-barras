@@ -3608,7 +3608,8 @@ with tab_pallets:
             st.rerun()
     max_pallet_actual = max(pallets_actuales) if pallets_actuales else 0
     p_ctrl1, p_ctrl2, p_ctrl3 = st.columns([1, 1, 2])
-    hasta_pallet = p_ctrl1.number_input("Ultimo pallet impreso", min_value=1, value=max(52, max_pallet_actual or 1), step=1)
+    hasta_default = max(52, max_pallet_actual or 1)
+    hasta_pallet = p_ctrl1.number_input("Completar faltantes hasta el pallet", min_value=1, value=hasta_default, step=1, key="hasta_pallet_faltantes")
     cajas_faltantes = p_ctrl2.number_input("Cajas por pallet faltante", min_value=1, value=int(cantidad_bultos_activo), step=1)
     faltantes = [p for p in range(1, int(hasta_pallet) + 1) if p not in pallets_actuales]
     p_ctrl3.write(f"Pallets faltantes: {', '.join(map(str, faltantes[:20]))}{'...' if len(faltantes) > 20 else ''}" if faltantes else "No hay pallets faltantes en ese rango.")
@@ -3628,10 +3629,28 @@ with tab_pallets:
             st.success(f"Registre {len(faltantes)} pallet(s) faltante(s) para no perder la numeracion.")
             st.rerun()
 
+    p_uno1, p_uno2, p_uno3 = st.columns([1, 1, 2])
+    pallet_puntual = p_uno1.number_input("Registrar solo este pallet", min_value=1, value=max_pallet_actual + 1 if max_pallet_actual else 1, step=1, key="pallet_puntual_sin_detalle")
+    cajas_puntual = p_uno2.number_input("Cajas de ese pallet", min_value=1, value=int(cantidad_bultos_activo), step=1, key="cajas_puntual_sin_detalle")
+    ya_existe_puntual = int(pallet_puntual) in pallets_actuales
+    p_uno3.write("Ese pallet ya existe en la mudanza." if ya_existe_puntual else "Este boton registra solo el pallet indicado, sin completar rangos.")
+    if p_uno3.button("Registrar solo ese pallet sin detalle", disabled=ya_existe_puntual):
+        registrar_pallet_sin_detalle(
+            int(pallet_puntual),
+            int(cajas_puntual),
+            deposito_origen,
+            deposito_destino,
+            observaciones="Pallet impreso/hecho, pendiente completar articulos",
+        )
+        guardar_mudanza_actual_db()
+        st.success(f"Registre el pallet {int(pallet_puntual)} sin detalle.")
+        st.rerun()
+
     with st.expander("Cargar pallet faltante con detalle de articulos", expanded=False):
         st.caption("Usalo cuando el pallet existe impreso pero no quedo en el sistema. Formato recomendado: codigo; descripcion; piezas. Tambien acepta: caja; codigo; descripcion; piezas.")
         fp1, fp2, fp3 = st.columns([1, 1, 1])
-        pallet_faltante_detalle = fp1.number_input("Pallet faltante", min_value=1, value=max_pallet_actual + 1 if max_pallet_actual else 1, step=1, key="pallet_faltante_detalle")
+        detalle_default = int(st.session_state.get("pallet_puntual_sin_detalle", max_pallet_actual + 1 if max_pallet_actual else 1))
+        pallet_faltante_detalle = fp1.number_input("Pallet a cargar/actualizar", min_value=1, value=detalle_default, step=1, key="pallet_faltante_detalle")
         cajas_faltante_detalle = fp2.number_input("Cantidad de cajas", min_value=1, value=1, step=1, key="cajas_faltante_detalle")
         ubicacion_faltante_detalle = fp3.text_input("Ubicacion inicial", value="PENDIENTE", key="ubicacion_faltante_detalle")
         texto_faltante = st.text_area(
