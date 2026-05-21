@@ -3359,6 +3359,11 @@ stock_darkinel_metric = stock_darkinel_actualizado(stock_consolidado, df_operati
 stock_polo_metric = stock_polo_actualizado(df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
 piezas_darkinel_metric = int(pd.to_numeric(stock_darkinel_metric.get("Stock restante Darkinel", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
 piezas_polo_metric = int(pd.to_numeric(stock_polo_metric.get("Stock total Polo", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+piezas_nodum_metric = int(pd.to_numeric(stock_consolidado.get("cantidad", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not stock_consolidado.empty else 0
+piezas_mudanza_metric = int(pd.to_numeric(df_operativo.get("cantidad_mudada", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+sku_nodum_metric = int((pd.to_numeric(stock_consolidado.get("cantidad", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if not stock_consolidado.empty else 0
+sku_polo_metric = int((pd.to_numeric(stock_polo_metric.get("Stock total Polo", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if not stock_polo_metric.empty else 0
+sku_darkinel_metric = int((pd.to_numeric(stock_darkinel_metric.get("Stock restante Darkinel", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if not stock_darkinel_metric.empty else 0
 
 if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not df_reimpresion.empty:
     st.info(f"El control anterior cargado trae {len(df_reimpresion)} lineas de mudanza.")
@@ -3377,11 +3382,16 @@ if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not
             st.success("Mudanza reemplazada por el control anterior.")
             st.rerun()
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Codigos con stock", f"{len(stock_consolidado):,}".replace(",", "."))
-col2.metric("Piezas en Darkinel", f"{piezas_darkinel_metric:,}".replace(",", "."))
-col3.metric("Piezas en Polo Logistico", f"{piezas_polo_metric:,}".replace(",", "."))
-col4.metric("Piezas en mudanza", f"{int(pd.to_numeric(df_operativo.get('cantidad_mudada', pd.Series(dtype=float)), errors='coerce').fillna(0).sum()):,}".replace(",", "."))
+sku_col1, sku_col2, sku_col3 = st.columns(3)
+sku_col1.metric("SKU total Nodum", f"{sku_nodum_metric:,}".replace(",", "."))
+sku_col2.metric("SKU en Polo Logistico", f"{sku_polo_metric:,}".replace(",", "."))
+sku_col3.metric("SKU restante en Darkinel", f"{sku_darkinel_metric:,}".replace(",", "."))
+
+pza_col1, pza_col2, pza_col3, pza_col4 = st.columns(4)
+pza_col1.metric("Piezas total Nodum", f"{piezas_nodum_metric:,}".replace(",", "."))
+pza_col2.metric("Piezas restante en Darkinel", f"{piezas_darkinel_metric:,}".replace(",", "."))
+pza_col3.metric("Piezas en Polo Logistico", f"{piezas_polo_metric:,}".replace(",", "."))
+pza_col4.metric("Piezas en mudanza", f"{piezas_mudanza_metric:,}".replace(",", "."))
 
 st.markdown("---")
 
