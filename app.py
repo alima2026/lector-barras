@@ -1,5 +1,6 @@
 import io
 import json
+import math
 import re
 import sqlite3
 import base64
@@ -1640,8 +1641,6 @@ def dibujo_estante_darkinel(loc_df: pd.DataFrame):
     verde = colors.HexColor("#9AD80F")
     dibujo = Drawing(ancho, alto)
     dibujo.add(Rect(0, margen_inf, ancho, est_alto, strokeColor=colors.black, strokeWidth=1.5, fillColor=None))
-    dibujo.add(Line(ancho / 2, margen_inf, ancho / 2, margen_inf + est_alto, strokeColor=colors.black, strokeWidth=1.2))
-    dibujo.add(Line(0, margen_inf + est_alto / 2, ancho, margen_inf + est_alto / 2, strokeColor=colors.black, strokeWidth=1.2))
 
     if loc_df is None or loc_df.empty:
         conteos = {}
@@ -1655,6 +1654,21 @@ def dibujo_estante_darkinel(loc_df: pd.DataFrame):
 
     def piezas(nombre: str) -> str:
         return formatear_numero(conteos.get(nombre, 0))
+
+    piezas_estrella = float(conteos.get("ESTRELLA", 0) or 0)
+    if piezas_estrella > 0:
+        cx, cy = ancho / 2, margen_inf + est_alto / 2
+        puntos = []
+        for i in range(10):
+            radio = 24 * mm if i % 2 == 0 else 10 * mm
+            angulo = math.radians(-90 + i * 36)
+            puntos.extend([cx + radio * math.cos(angulo), cy + radio * math.sin(angulo)])
+        dibujo.add(Polygon(puntos, strokeColor=verde, strokeWidth=2.4, fillColor=None))
+        dibujo.add(String(6 * mm, margen_inf + est_alto - 8 * mm, f"ESTRELLA / TODO EL ESTANTE: {piezas('ESTRELLA')}", fontSize=8, fillColor=colors.black))
+        return dibujo
+
+    dibujo.add(Line(ancho / 2, margen_inf, ancho / 2, margen_inf + est_alto, strokeColor=colors.black, strokeWidth=1.2))
+    dibujo.add(Line(0, margen_inf + est_alto / 2, ancho, margen_inf + est_alto / 2, strokeColor=colors.black, strokeWidth=1.2))
 
     dibujo.add(String(4 * mm, margen_inf + est_alto - 8 * mm, f"CUADRADO: {piezas('CUADRADO')}", fontSize=7, fillColor=colors.black))
     dibujo.add(Rect(17 * mm, margen_inf + est_alto * 0.64, 19 * mm, 13 * mm, strokeColor=verde, strokeWidth=2.2, fillColor=None))
@@ -1743,10 +1757,10 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
         story.append(Spacer(1, 5 * mm))
 
         rows = [[
-            Paragraph("<b>Codigo articulo</b>", header_style),
+            Paragraph("<b>Articulo</b>", header_style),
             Paragraph("<b>Descripcion</b>", header_style),
             Paragraph("<b>Cantidad</b>", header_style),
-            Paragraph("<b>Ubicacion exacta</b>", header_style),
+            Paragraph("<b>Codigo de barras</b>", header_style),
             Paragraph("<b>Zona estante</b>", header_style),
             Paragraph("<b>Contado por / fecha</b>", header_style),
         ]]
@@ -1754,16 +1768,22 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
             contado_por = str(getattr(row, "contado_por", "") or "").strip()
             fecha = str(getattr(row, "fecha_hora", "") or "").strip()
             sububicacion = normalizar_sububicacion_darkinel(getattr(row, "sububicacion", ""))
+            articulo_pdf = str(getattr(row, "articulo", "") or getattr(row, "codigo_normalizado", "") or "").strip()
+            codigo_barra_pdf = codigo_barra_articulo(articulo_pdf) or normalizar_codigo(articulo_pdf) or "SIN-CODIGO"
+            barcode_cell = [
+                code128.Code128(codigo_barra_pdf, barHeight=9 * mm, barWidth=0.22 * mm, humanReadable=False),
+                Paragraph(_html_escape(codigo_barra_pdf), chico),
+            ]
             rows.append([
-                Paragraph(_html_escape(str(getattr(row, "articulo", "") or getattr(row, "codigo_normalizado", ""))), chico),
+                Paragraph(_html_escape(articulo_pdf), chico),
                 Paragraph(_html_escape(str(getattr(row, "descripcion", "") or "")), chico),
                 Paragraph(_html_escape(formatear_numero(getattr(row, "cantidad_contada", 0))), chico),
-                Paragraph(_html_escape(ubicacion_darkinel_detalle(ubicacion_pdf, sububicacion)), chico),
+                barcode_cell,
                 Paragraph(_html_escape(sububicacion), chico),
                 Paragraph(_html_escape(" / ".join([x for x in [contado_por, fecha] if x])), chico),
             ])
 
-        tabla = Table(rows, colWidths=[31 * mm, 58 * mm, 18 * mm, 38 * mm, 25 * mm, 25 * mm], repeatRows=1)
+        tabla = Table(rows, colWidths=[28 * mm, 50 * mm, 16 * mm, 48 * mm, 20 * mm, 24 * mm], repeatRows=1)
         tabla.setStyle(
             TableStyle(
                 [
