@@ -26,7 +26,7 @@ try:
     from reportlab.graphics.barcode import code39
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
     from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
@@ -1330,7 +1330,7 @@ def limpiar_df_visible(df: pd.DataFrame) -> pd.DataFrame:
 def salidas_polo_df() -> pd.DataFrame:
     columnas = [
         "salida_id", "remito_num", "fecha_hora", "solicitado_por", "responsable",
-        "codigo_normalizado", "articulo", "descripcion", "ubicacion", "cantidad", "observaciones",
+        "codigo_normalizado", "codigo_barra", "articulo", "descripcion", "ubicacion", "cantidad", "observaciones",
     ]
     df = pd.DataFrame(st.session_state.get("salidas_polo", []))
     if df.empty:
@@ -1342,6 +1342,10 @@ def salidas_polo_df() -> pd.DataFrame:
     df["remito_num"] = df["remito_num"].fillna("").astype(str).str.strip()
     df.loc[df["remito_num"].eq(""), "remito_num"] = df["salida_id"].map(lambda x: f"R{x:06d}" if int(x or 0) > 0 else "")
     df["codigo_normalizado"] = df["codigo_normalizado"].map(normalizar_codigo)
+    df["articulo"] = df["articulo"].fillna("").astype(str).str.strip()
+    df["codigo_barra"] = df["codigo_barra"].fillna("").astype(str).str.strip()
+    df.loc[df["codigo_barra"].eq(""), "codigo_barra"] = df["articulo"]
+    df.loc[df["codigo_barra"].eq(""), "codigo_barra"] = df["codigo_normalizado"]
     df["ubicacion"] = df["ubicacion"].fillna("").astype(str).str.strip().str.upper()
     df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
     return df[columnas]
@@ -1382,7 +1386,7 @@ def conteo_darkinel_resumen_df() -> pd.DataFrame:
 
 
 def mostrar_salidas_polo(df: pd.DataFrame) -> pd.DataFrame:
-    columnas = ["Remito", "Fecha/Hora", "Solicitado por", "Codigo normalizado", "Articulo", "Descripcion", "Locacion", "Cantidad", "Responsable", "Observaciones"]
+    columnas = ["Remito", "Fecha/Hora", "Solicitado por", "Codigo normalizado", "Codigo de barras", "Articulo", "Descripcion", "Locacion", "Cantidad", "Responsable", "Observaciones"]
     if df.empty:
         return pd.DataFrame(columns=columnas)
     salida = df.rename(
@@ -1391,6 +1395,7 @@ def mostrar_salidas_polo(df: pd.DataFrame) -> pd.DataFrame:
             "fecha_hora": "Fecha/Hora",
             "solicitado_por": "Solicitado por",
             "codigo_normalizado": "Codigo normalizado",
+            "codigo_barra": "Codigo de barras",
             "articulo": "Articulo",
             "descripcion": "Descripcion",
             "ubicacion": "Locacion",
@@ -1465,6 +1470,189 @@ def generar_remito_salida_html(salida: dict) -> bytes:
 </html>"""
     return html.encode("utf-8")
 
+
+def generar_remito_salida_pdf(salida: dict) -> bytes:
+    if not REPORTLAB_DISPONIBLE:
+        return generar_remito_salida_html(salida)
+
+    remito = str(salida.get("remito_num", "")).strip() or f"R{int(salida.get('salida_id', 0) or 0):06d}"
+    fecha = str(salida.get("fecha_hora", "")).strip()
+    solicitado = str(salida.get("solicitado_por", "")).strip()
+    responsable = str(salida.get("responsable", "")).strip()
+    articulo = str(salida.get("articulo", "")).strip()
+    descripcion = str(salida.get("descripcion", "")).strip()
+    codigo = str(salida.get("codigo_normalizado", "")).strip()
+    codigo_barra = str(salida.get("codigo_barra") or articulo or codigo).strip()
+    ubicacion = str(salida.get("ubicacion", "")).strip()
+    cantidad = formatear_numero(salida.get("cantidad", 0))
+    observaciones = str(salida.get("observaciones", "")).strip()
+
+    output = io.BytesIO()
+    doc = SimpleDocTemplate(
+        output,
+        pagesize=A4,
+        leftMargin=14 * mm,
+        rightMargin=14 * mm,
+        topMargin=12 * mm,
+        bottomMargin=12 * mm,
+    )
+    styles = getSampleStyleSheet()
+    title_style = styles["Title"]
+    title_style.fontSize = 18
+    normal = styles["BodyText"]
+    small = ParagraphStyle("BarcodeSmall", parent=normal, fontSize=8, leading=10)
+
+    barcode_cell = [
+        _barcode_articulo_flowable(codigo_barra),
+        Paragraph(_html_escape(codigo_barra), small),
+    ]
+    story = [
+        Paragraph("Remito de salida Polo", title_style),
+        Spacer(1, 5 * mm),
+        Table(
+            [
+                [Paragraph("<b>Remito</b>", normal), remito, Paragraph("<b>Fecha</b>", normal), fecha],
+                [Paragraph("<b>Origen</b>", normal), "POLO LOGISTICO", Paragraph("<b>Destino</b>", normal), "DARKINEL / solicitante"],
+                [Paragraph("<b>Solicitado por</b>", normal), solicitado or "-", Paragraph("<b>Responsable entrega</b>", normal), responsable or "-"],
+                [Paragraph("<b>Observaciones</b>", normal), observaciones or "-", "", ""],
+            ],
+            colWidths=[30 * mm, 58 * mm, 40 * mm, 58 * mm],
+        ),
+        Spacer(1, 6 * mm),
+        Table(
+            [
+                [
+                    Paragraph("<b>Codigo</b>", normal),
+                    Paragraph("<b>Codigo de barras</b>", normal),
+                    Paragraph("<b>Articulo</b>", normal),
+                    Paragraph("<b>Descripcion</b>", normal),
+                    Paragraph("<b>Locacion Polo</b>", normal),
+                    Paragraph("<b>Cantidad</b>", normal),
+                ],
+                [
+                    Paragraph(_html_escape(codigo), normal),
+                    barcode_cell,
+                    Paragraph(_html_escape(articulo), normal),
+                    Paragraph(_html_escape(descripcion), normal),
+                    Paragraph(_html_escape(ubicacion), normal),
+                    Paragraph(_html_escape(cantidad), normal),
+                ],
+            ],
+            colWidths=[28 * mm, 45 * mm, 32 * mm, 52 * mm, 28 * mm, 20 * mm],
+            repeatRows=1,
+        ),
+        Spacer(1, 28 * mm),
+        Table(
+            [["Firma entrega Polo", "Firma recibe / solicita Darkinel"]],
+            colWidths=[85 * mm, 85 * mm],
+        ),
+    ]
+    for flowable in story:
+        if isinstance(flowable, Table):
+            flowable.setStyle(
+                TableStyle(
+                    [
+                        ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 8),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                        ("TOPPADDING", (0, 0), (-1, -1), 6),
+                    ]
+                )
+            )
+    doc.build(story)
+    return output.getvalue()
+
+
+def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str = "TODAS") -> bytes:
+    if not REPORTLAB_DISPONIBLE or conteos is None or conteos.empty:
+        return b""
+
+    trabajo = conteos.copy()
+    trabajo["ubicacion"] = trabajo["ubicacion"].fillna("").astype(str).str.strip().str.upper()
+    trabajo.loc[trabajo["ubicacion"].eq(""), "ubicacion"] = "SIN LOCACION"
+    trabajo["cantidad_contada"] = pd.to_numeric(trabajo["cantidad_contada"], errors="coerce").fillna(0)
+    if ubicacion_filtro and str(ubicacion_filtro).strip().upper() != "TODAS":
+        trabajo = trabajo[trabajo["ubicacion"].eq(str(ubicacion_filtro).strip().upper())].copy()
+    if trabajo.empty:
+        return b""
+
+    output = io.BytesIO()
+    doc = SimpleDocTemplate(
+        output,
+        pagesize=A4,
+        leftMargin=12 * mm,
+        rightMargin=12 * mm,
+        topMargin=10 * mm,
+        bottomMargin=10 * mm,
+    )
+    styles = getSampleStyleSheet()
+    titulo = styles["Title"]
+    titulo.fontSize = 17
+    normal = styles["BodyText"]
+    chico = ParagraphStyle("GondolaSmall", parent=normal, fontSize=8, leading=10)
+    header_style = ParagraphStyle("GondolaHeader", parent=normal, fontSize=10, leading=12)
+
+    story = []
+    ubicaciones = sorted([u for u in trabajo["ubicacion"].dropna().unique().tolist() if str(u).strip()])
+    for pos, ubicacion in enumerate(ubicaciones):
+        loc_df = trabajo[trabajo["ubicacion"].eq(ubicacion)].copy()
+        loc_df = loc_df.sort_values(["articulo", "descripcion"]).reset_index(drop=True)
+        total_piezas = float(loc_df["cantidad_contada"].sum())
+        story.append(Paragraph(f"Gondola / Estante: {ubicacion}", titulo))
+        story.append(Spacer(1, 3 * mm))
+        story.append(
+            Table(
+                [
+                    [Paragraph("<b>Locacion exacta</b>", normal), ubicacion, Paragraph("<b>Total piezas</b>", normal), formatear_numero(total_piezas)],
+                    [Paragraph("<b>Fecha impresion</b>", normal), ahora_texto(), Paragraph("<b>Lineas</b>", normal), str(len(loc_df))],
+                ],
+                colWidths=[34 * mm, 70 * mm, 32 * mm, 50 * mm],
+            )
+        )
+        story.append(Spacer(1, 5 * mm))
+
+        rows = [[
+            Paragraph("<b>Codigo articulo</b>", header_style),
+            Paragraph("<b>Descripcion</b>", header_style),
+            Paragraph("<b>Cantidad</b>", header_style),
+            Paragraph("<b>Ubicacion exacta</b>", header_style),
+            Paragraph("<b>Contado por / fecha</b>", header_style),
+        ]]
+        for row in loc_df.itertuples():
+            contado_por = str(getattr(row, "contado_por", "") or "").strip()
+            fecha = str(getattr(row, "fecha_hora", "") or "").strip()
+            rows.append([
+                Paragraph(_html_escape(str(getattr(row, "articulo", "") or getattr(row, "codigo_normalizado", ""))), chico),
+                Paragraph(_html_escape(str(getattr(row, "descripcion", "") or "")), chico),
+                Paragraph(_html_escape(formatear_numero(getattr(row, "cantidad_contada", 0))), chico),
+                Paragraph(_html_escape(ubicacion), chico),
+                Paragraph(_html_escape(" / ".join([x for x in [contado_por, fecha] if x])), chico),
+            ])
+
+        tabla = Table(rows, colWidths=[36 * mm, 68 * mm, 22 * mm, 34 * mm, 34 * mm], repeatRows=1)
+        tabla.setStyle(
+            TableStyle(
+                [
+                    ("GRID", (0, 0), (-1, -1), 0.35, colors.lightgrey),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("ALIGN", (2, 1), (2, -1), "RIGHT"),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ]
+            )
+        )
+        story.append(tabla)
+        if pos < len(ubicaciones) - 1:
+            story.append(PageBreak())
+
+    doc.build(story)
+    return output.getvalue()
 
 def aplicar_salidas_a_ubicaciones(ubicaciones: pd.DataFrame, salidas: pd.DataFrame) -> pd.DataFrame:
     if ubicaciones is None or ubicaciones.empty:
@@ -3921,7 +4109,7 @@ with tab_pallets:
                 "Descargar A4 imprimible HTML",
                 data=html_bytes,
                 file_name=f"pallet_{int(pallet_pdf)}_{modo_pdf_interno}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
-                mime="text/html",
+                mime="application/pdf",
                 type="primary",
             )
     else:
@@ -3951,7 +4139,7 @@ with tab_pallets:
                     "Descargar A4 imprimible HTML",
                     data=html_bytes,
                     file_name=f"pallet_{int(pallet_pdf)}_{modo_pdf_interno}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
-                    mime="text/html",
+                    mime="application/pdf",
                     type="primary",
                 )
 
@@ -4204,6 +4392,30 @@ with tab_salidas:
                     idx_sel = opciones_txt.index(seleccion)
                     fila_sel = opciones_polo.reset_index(drop=True).iloc[idx_sel]
                     disponible = float(fila_sel["cantidad_num"])
+                    codigo_barra_salida = str(fila_sel.get("articulo", "") or fila_sel.get("codigo_normalizado", "")).strip()
+                    st.info(
+                        f"Retirar de locacion Polo: {fila_sel['ubicacion']} | "
+                        f"Disponible: {formatear_numero(disponible)} | "
+                        f"Codigo de barras: {codigo_barra_salida}"
+                    )
+                    st.dataframe(
+                        limpiar_df_visible(
+                            pd.DataFrame(
+                                [
+                                    {
+                                        "Codigo normalizado": fila_sel["codigo_normalizado"],
+                                        "Codigo de barras": codigo_barra_salida,
+                                        "Articulo": fila_sel["articulo"],
+                                        "Descripcion": fila_sel["descripcion"],
+                                        "Locacion Polo": fila_sel["ubicacion"],
+                                        "Disponible": formatear_numero(disponible),
+                                    }
+                                ]
+                            )
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
                     proximo_remito = f"R{int(st.session_state.get('remito_seq', 0) or 0) + 1:06d}"
                     st.caption(f"Proximo remito: {proximo_remito}")
                     with st.form("form_salida_polo"):
@@ -4229,6 +4441,7 @@ with tab_salidas:
                             "fecha_hora": ahora_texto(),
                             "solicitado_por": solicitado_por,
                             "codigo_normalizado": fila_sel["codigo_normalizado"],
+                            "codigo_barra": codigo_barra_salida,
                             "articulo": fila_sel["articulo"],
                             "descripcion": fila_sel["descripcion"],
                             "ubicacion": fila_sel["ubicacion"],
@@ -4248,10 +4461,10 @@ with tab_salidas:
     if isinstance(ultimo_remito, dict) and ultimo_remito:
         ultimo_num = str(ultimo_remito.get("remito_num", "")).strip()
         st.download_button(
-            f"Descargar ultimo remito {ultimo_num}",
-            data=generar_remito_salida_html(ultimo_remito),
-            file_name=f"remito_{ultimo_num or 'salida_polo'}.html",
-            mime="text/html",
+            f"Descargar ultimo remito PDF {ultimo_num}",
+            data=generar_remito_salida_pdf(ultimo_remito),
+            file_name=f"remito_{ultimo_num or 'salida_polo'}.pdf",
+            mime="application/pdf",
         )
     if not salidas_historial.empty:
         remitos_opciones = [
@@ -4263,10 +4476,10 @@ with tab_salidas:
         remito_row = salidas_ordenadas.iloc[remitos_opciones.index(remito_elegido)].to_dict()
         remito_num = str(remito_row.get("remito_num", "")).strip()
         st.download_button(
-            "Descargar remito seleccionado",
-            data=generar_remito_salida_html(remito_row),
-            file_name=f"remito_{remito_num or 'salida_polo'}.html",
-            mime="text/html",
+            "Descargar remito seleccionado PDF",
+            data=generar_remito_salida_pdf(remito_row),
+            file_name=f"remito_{remito_num or 'salida_polo'}.pdf",
+            mime="application/pdf",
         )
     st.dataframe(limpiar_df_visible(mostrar_salidas_polo(salidas_historial)), use_container_width=True, hide_index=True)
 
@@ -4351,6 +4564,30 @@ with tab_bases:
         if not conteos_actuales.empty:
             st.markdown("**Ultimos conteos guardados**")
             st.dataframe(limpiar_df_visible(conteos_actuales.sort_values("fecha_hora", ascending=False)), use_container_width=True, hide_index=True)
+            st.markdown("**PDF para imprimir por gondola / estante**")
+            ubicaciones_pdf = sorted(
+                [
+                    str(x).strip().upper()
+                    for x in conteos_actuales["ubicacion"].dropna().unique().tolist()
+                    if str(x).strip()
+                ]
+            )
+            seleccion_pdf = st.selectbox(
+                "Locacion a imprimir",
+                ["TODAS"] + ubicaciones_pdf,
+                key="pdf_gondola_darkinel_ubicacion",
+            )
+            pdf_gondola = generar_pdf_gondolas_darkinel(conteos_actuales, seleccion_pdf)
+            if pdf_gondola:
+                nombre_pdf = "todas_las_locaciones" if seleccion_pdf == "TODAS" else seleccion_pdf.replace(" ", "_").replace("/", "-")
+                st.download_button(
+                    "Descargar PDF de locacion",
+                    data=pdf_gondola,
+                    file_name=f"gondola_darkinel_{nombre_pdf}.pdf",
+                    mime="application/pdf",
+                )
+            else:
+                st.warning("No hay datos para generar el PDF de esa locacion.")
 
     st.dataframe(limpiar_df_visible(balance_actual), use_container_width=True, hide_index=True)
 
