@@ -391,6 +391,30 @@ def cargar_salidas_polo_db() -> Dict[str, object]:
     return estado
 
 
+def guardar_salidas_darkinel_db() -> None:
+    guardar_estado_db(
+        "salidas_darkinel",
+        {
+            "salidas": st.session_state.get("salidas_darkinel", []),
+            "salida_darkinel_seq": st.session_state.get("salida_darkinel_seq", 0),
+            "remito_darkinel_seq": st.session_state.get("remito_darkinel_seq", 0),
+        },
+    )
+
+
+def cargar_salidas_darkinel_db() -> Dict[str, object]:
+    estado = cargar_estado_db(
+        "salidas_darkinel",
+        {"salidas": [], "salida_darkinel_seq": 0, "remito_darkinel_seq": 0},
+    )
+    if not isinstance(estado, dict):
+        return {"salidas": [], "salida_darkinel_seq": 0, "remito_darkinel_seq": 0}
+    estado.setdefault("salidas", [])
+    estado.setdefault("salida_darkinel_seq", 0)
+    estado.setdefault("remito_darkinel_seq", estado.get("salida_darkinel_seq", 0) or 0)
+    return estado
+
+
 def guardar_conteo_darkinel_db() -> None:
     guardar_estado_db(
         "conteo_darkinel",
@@ -1434,6 +1458,30 @@ def salidas_polo_df() -> pd.DataFrame:
     return df[columnas]
 
 
+def salidas_darkinel_df() -> pd.DataFrame:
+    columnas = [
+        "salida_id", "remito_num", "fecha_hora", "solicitado_por", "responsable",
+        "codigo_normalizado", "codigo_barra", "articulo", "descripcion", "ubicacion", "cantidad", "observaciones",
+    ]
+    df = pd.DataFrame(st.session_state.get("salidas_darkinel", []))
+    if df.empty:
+        return pd.DataFrame(columns=columnas)
+    for col in columnas:
+        if col not in df.columns:
+            df[col] = "" if col not in ["salida_id", "cantidad"] else 0
+    df["salida_id"] = pd.to_numeric(df["salida_id"], errors="coerce").fillna(0).astype(int)
+    df["remito_num"] = df["remito_num"].fillna("").astype(str).str.strip()
+    df.loc[df["remito_num"].eq(""), "remito_num"] = df["salida_id"].map(lambda x: f"RD{x:06d}" if int(x or 0) > 0 else "")
+    df["codigo_normalizado"] = df["codigo_normalizado"].map(normalizar_codigo)
+    df["articulo"] = df["articulo"].fillna("").astype(str).str.strip()
+    df["codigo_barra"] = df["codigo_barra"].fillna("").astype(str).str.strip()
+    df.loc[df["codigo_barra"].eq(""), "codigo_barra"] = df["articulo"]
+    df.loc[df["codigo_barra"].eq(""), "codigo_barra"] = df["codigo_normalizado"]
+    df["ubicacion"] = df["ubicacion"].fillna("").astype(str).str.strip()
+    df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
+    return df[columnas]
+
+
 SUBUBICACIONES_DARKINEL = ["ESTRELLA", "CUADRADO", "CIRCULO", "TRIANGULO", "X"]
 ORDEN_SUBUBICACIONES_DARKINEL = {nombre: pos for pos, nombre in enumerate(SUBUBICACIONES_DARKINEL + ["SIN SUBDIVISION"])}
 
@@ -1534,6 +1582,12 @@ def generar_remito_salida_html(salida: dict) -> bytes:
     fecha = str(salida.get("fecha_hora", "")).strip()
     solicitado = str(salida.get("solicitado_por", "")).strip()
     responsable = str(salida.get("responsable", "")).strip()
+    titulo_remito = str(salida.get("titulo_remito", "Remito de salida Polo")).strip() or "Remito de salida Polo"
+    deposito_origen = str(salida.get("deposito_origen", "POLO LOGISTICO")).strip() or "POLO LOGISTICO"
+    deposito_destino = str(salida.get("deposito_destino", "DARKINEL / solicitante")).strip() or "DARKINEL / solicitante"
+    locacion_label = str(salida.get("locacion_label", "Locacion Polo")).strip() or "Locacion Polo"
+    firma_entrega = str(salida.get("firma_entrega", f"Firma entrega {deposito_origen}")).strip() or f"Firma entrega {deposito_origen}"
+    firma_recibe = str(salida.get("firma_recibe", "Firma recibe / solicita")).strip() or "Firma recibe / solicita"
     articulo = str(salida.get("articulo", "")).strip()
     descripcion = str(salida.get("descripcion", "")).strip()
     codigo = str(salida.get("codigo_normalizado", "")).strip()
@@ -1561,9 +1615,9 @@ def generar_remito_salida_html(salida: dict) -> bytes:
 <body>
   <div class="head">
     <div>
-      <h1>Remito de salida Polo</h1>
-      <div>Deposito origen: POLO LOGISTICO</div>
-      <div>Destino: DARKINEL / solicitante</div>
+      <h1>{titulo_remito}</h1>
+      <div>Deposito origen: {deposito_origen}</div>
+      <div>Destino: {deposito_destino}</div>
     </div>
     <div class="meta">
       <strong>Remito:</strong> {remito}<br>
@@ -1577,15 +1631,15 @@ def generar_remito_salida_html(salida: dict) -> bytes:
   </div>
   <table>
     <thead>
-      <tr><th>Codigo</th><th>Articulo</th><th>Descripcion</th><th>Locacion Polo</th><th>Cantidad</th></tr>
+      <tr><th>Codigo</th><th>Articulo</th><th>Descripcion</th><th>{locacion_label}</th><th>Cantidad</th></tr>
     </thead>
     <tbody>
       <tr><td>{codigo}</td><td>{articulo}</td><td>{descripcion}</td><td>{ubicacion}</td><td>{cantidad}</td></tr>
     </tbody>
   </table>
   <div class="firmas">
-    <div class="firma">Firma entrega Polo</div>
-    <div class="firma">Firma recibe / solicita Darkinel</div>
+    <div class="firma">{firma_entrega}</div>
+    <div class="firma">{firma_recibe}</div>
   </div>
 </body>
 </html>"""
@@ -1600,6 +1654,12 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
     fecha = str(salida.get("fecha_hora", "")).strip()
     solicitado = str(salida.get("solicitado_por", "")).strip()
     responsable = str(salida.get("responsable", "")).strip()
+    titulo_remito = str(salida.get("titulo_remito", "Remito de salida Polo")).strip() or "Remito de salida Polo"
+    deposito_origen = str(salida.get("deposito_origen", "POLO LOGISTICO")).strip() or "POLO LOGISTICO"
+    deposito_destino = str(salida.get("deposito_destino", "DARKINEL / solicitante")).strip() or "DARKINEL / solicitante"
+    locacion_label = str(salida.get("locacion_label", "Locacion Polo")).strip() or "Locacion Polo"
+    firma_entrega = str(salida.get("firma_entrega", f"Firma entrega {deposito_origen}")).strip() or f"Firma entrega {deposito_origen}"
+    firma_recibe = str(salida.get("firma_recibe", "Firma recibe / solicita")).strip() or "Firma recibe / solicita"
     articulo = str(salida.get("articulo", "")).strip()
     descripcion = str(salida.get("descripcion", "")).strip()
     codigo = str(salida.get("codigo_normalizado", "")).strip()
@@ -1628,12 +1688,12 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
         Paragraph(_html_escape(codigo_barra), small),
     ]
     story = [
-        Paragraph("Remito de salida Polo", title_style),
+        Paragraph(_html_escape(titulo_remito), title_style),
         Spacer(1, 5 * mm),
         Table(
             [
                 [Paragraph("<b>Remito</b>", normal), remito, Paragraph("<b>Fecha</b>", normal), fecha],
-                [Paragraph("<b>Origen</b>", normal), "POLO LOGISTICO", Paragraph("<b>Destino</b>", normal), "DARKINEL / solicitante"],
+                [Paragraph("<b>Origen</b>", normal), deposito_origen, Paragraph("<b>Destino</b>", normal), deposito_destino],
                 [Paragraph("<b>Solicitado por</b>", normal), solicitado or "-", Paragraph("<b>Responsable entrega</b>", normal), responsable or "-"],
                 [Paragraph("<b>Observaciones</b>", normal), observaciones or "-", "", ""],
             ],
@@ -1647,7 +1707,7 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
                     Paragraph("<b>Codigo de barras</b>", normal),
                     Paragraph("<b>Articulo</b>", normal),
                     Paragraph("<b>Descripcion</b>", normal),
-                    Paragraph("<b>Locacion Polo</b>", normal),
+                    Paragraph(f"<b>{_html_escape(locacion_label)}</b>", normal),
                     Paragraph("<b>Cantidad</b>", normal),
                 ],
                 [
@@ -1664,7 +1724,7 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
         ),
         Spacer(1, 28 * mm),
         Table(
-            [["Firma entrega Polo", "Firma recibe / solicita Darkinel"]],
+            [[firma_entrega, firma_recibe]],
             colWidths=[85 * mm, 85 * mm],
         ),
     ]
@@ -1903,6 +1963,53 @@ def aplicar_salidas_a_ubicaciones(ubicaciones: pd.DataFrame, salidas: pd.DataFra
     return trabajo.drop(columns=["_codigo_salida", "_ubicacion_salida", "_piezas_num"], errors="ignore")
 
 
+def aplicar_salidas_a_inventario(inventario: pd.DataFrame, salidas: pd.DataFrame, deposito: str | None = None) -> pd.DataFrame:
+    if inventario is None or inventario.empty:
+        return inventario
+    trabajo = inventario.copy()
+    if salidas is None or salidas.empty:
+        return trabajo
+
+    requeridas = {"codigo_normalizado", "ubicacion", "cantidad"}
+    if not requeridas.issubset(set(trabajo.columns)) or not requeridas.issubset(set(salidas.columns)):
+        return trabajo
+
+    sal = salidas.copy()
+    sal["codigo_normalizado"] = sal["codigo_normalizado"].map(normalizar_codigo)
+    sal["ubicacion"] = sal["ubicacion"].map(normalizar_locacion)
+    sal["cantidad"] = pd.to_numeric(sal["cantidad"], errors="coerce").fillna(0)
+    sal = sal[(sal["codigo_normalizado"] != "") & (sal["cantidad"] > 0)].copy()
+    if sal.empty:
+        return trabajo
+
+    trabajo["_codigo_salida"] = trabajo["codigo_normalizado"].map(normalizar_codigo)
+    trabajo["_ubicacion_salida"] = trabajo["ubicacion"].map(normalizar_locacion)
+    trabajo["_cantidad_num"] = pd.to_numeric(trabajo["cantidad"], errors="coerce").fillna(0)
+
+    salidas_por_locacion = sal.groupby(["codigo_normalizado", "ubicacion"])["cantidad"].sum().to_dict()
+    filtro_deposito = None
+    if deposito and "deposito" in trabajo.columns:
+        filtro_deposito = str(deposito).strip().upper()
+
+    cantidades = []
+    for _, row in trabajo.iterrows():
+        cantidad = float(row["_cantidad_num"] or 0)
+        if filtro_deposito and str(row.get("deposito", "")).strip().upper() != filtro_deposito:
+            cantidades.append(cantidad)
+            continue
+        clave = (row["_codigo_salida"], row["_ubicacion_salida"])
+        descontar = float(salidas_por_locacion.get(clave, 0) or 0)
+        if descontar > 0:
+            usado = min(cantidad, descontar)
+            cantidad -= usado
+            salidas_por_locacion[clave] = descontar - usado
+        cantidades.append(cantidad)
+
+    trabajo["cantidad"] = cantidades
+    trabajo = trabajo[pd.to_numeric(trabajo["cantidad"], errors="coerce").fillna(0) > 0].copy()
+    return trabajo.drop(columns=["_codigo_salida", "_ubicacion_salida", "_cantidad_num"], errors="ignore")
+
+
 def stock_polo_desde_ubicaciones_con_salidas(ubicaciones: pd.DataFrame, salidas: pd.DataFrame) -> pd.DataFrame:
     return stock_polo_desde_ubicaciones(aplicar_salidas_a_ubicaciones(ubicaciones, salidas))
 
@@ -2093,6 +2200,21 @@ def inicializar_estado() -> None:
     if "remito_seq" not in st.session_state:
         estado_salidas = cargar_salidas_polo_db()
         st.session_state.remito_seq = int(estado_salidas.get("remito_seq", estado_salidas.get("salida_seq", 0)) or 0)
+    if "salidas_darkinel" not in st.session_state:
+        estado_salidas_darkinel = cargar_salidas_darkinel_db()
+        st.session_state.salidas_darkinel = estado_salidas_darkinel.get("salidas", [])
+    if "salida_darkinel_seq" not in st.session_state:
+        estado_salidas_darkinel = cargar_salidas_darkinel_db()
+        st.session_state.salida_darkinel_seq = int(estado_salidas_darkinel.get("salida_darkinel_seq", 0) or 0)
+    if "remito_darkinel_seq" not in st.session_state:
+        estado_salidas_darkinel = cargar_salidas_darkinel_db()
+        st.session_state.remito_darkinel_seq = int(
+            estado_salidas_darkinel.get(
+                "remito_darkinel_seq",
+                estado_salidas_darkinel.get("salida_darkinel_seq", 0),
+            )
+            or 0
+        )
     if "conteo_darkinel" not in st.session_state:
         estado_conteo = cargar_conteo_darkinel_db()
         st.session_state.conteo_darkinel = estado_conteo.get("conteos", [])
@@ -3189,6 +3311,7 @@ def generar_excel_control(
     ubicaciones_anteriores: pd.DataFrame,
     historial_anterior: pd.DataFrame,
     salidas_polo: pd.DataFrame | None = None,
+    salidas_darkinel: pd.DataFrame | None = None,
 ) -> bytes:
     darkinel = limpiar_df_visible(stock_darkinel_actualizado(stock_consolidado, df_pick))
     polo = limpiar_df_visible(stock_polo_actualizado(df_pick, stock_polo_anterior, ubicaciones_anteriores, salidas_polo))
@@ -3198,6 +3321,7 @@ def generar_excel_control(
     detalle = limpiar_df_visible(preparar_detalle_mudanza(df_pick))
     recepcion = limpiar_df_visible(preparar_recepcion_polo(df_pick))
     salidas_export = limpiar_df_visible(mostrar_salidas_polo(salidas_polo_df() if salidas_polo is None else salidas_polo))
+    salidas_darkinel_export = limpiar_df_visible(mostrar_salidas_polo(salidas_darkinel_df() if salidas_darkinel is None else salidas_darkinel))
     balance = limpiar_df_visible(balance_darkinel_polo(stock_consolidado, df_pick, stock_polo_anterior, ubicaciones_anteriores, salidas_polo))
 
     resumen_depositos = pd.DataFrame(
@@ -3225,6 +3349,7 @@ def generar_excel_control(
         ubicacion.to_excel(writer, index=False, sheet_name="UBICACION_POLO_LOGISTICO")
         historial.to_excel(writer, index=False, sheet_name="HISTORIAL_MUDANZAS")
         salidas_export.to_excel(writer, index=False, sheet_name="SALIDAS_POLO")
+        salidas_darkinel_export.to_excel(writer, index=False, sheet_name="SALIDAS_DARKINEL")
         recepcion.to_excel(writer, index=False, sheet_name="RECEPCION_POLO")
         resumen.to_excel(writer, index=False, sheet_name="COMPOSICION_PALLETS")
         detalle.to_excel(writer, index=False, sheet_name="DETALLE_MUDANZA")
@@ -3794,6 +3919,7 @@ usando_control_anterior = df_pick.empty and not df_reimpresion.empty
 mudanza_activa_es_control_anterior = misma_mudanza(df_pick, df_reimpresion)
 ubicaciones_operativas = pd.DataFrame() if usando_control_anterior or mudanza_activa_es_control_anterior else ubicaciones_anteriores
 salidas_polo_actual = salidas_polo_df()
+salidas_darkinel_actual = salidas_darkinel_df()
 stock_darkinel_metric = stock_darkinel_actualizado(stock_consolidado, df_operativo)
 stock_polo_metric = stock_polo_actualizado(df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
 stock_darkinel_metric_visible = limpiar_df_visible(stock_darkinel_metric)
@@ -4269,7 +4395,7 @@ with tab_pallets:
             st.rerun()
 
     if not df_operativo.empty:
-        excel_bytes = generar_excel_control(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_operativas, historial_anterior, salidas_polo_actual)
+        excel_bytes = generar_excel_control(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_operativas, historial_anterior, salidas_polo_actual, salidas_darkinel_actual)
         st.download_button(
             "Descargar control actualizado Excel",
             data=excel_bytes,
@@ -4875,6 +5001,187 @@ with tab_bases:
             else:
                 st.warning("No hay datos para generar el PDF de esa locacion.")
 
+    with st.expander("Salidas desde Darkinel", expanded=False):
+        st.caption("Usalo para retirar mercaderia que ya fue contada y ubicada en Darkinel. La salida descuenta la cantidad de esa locacion y genera un remito RD correlativo.")
+        inventario_salida_darkinel = inventario_para_buscar(
+            stock_consolidado,
+            df_operativo,
+            ubicaciones_operativas,
+            frecuencias_df,
+            salidas_polo_actual,
+        )
+        inventario_salida_darkinel = aplicar_salidas_a_inventario(
+            inventario_salida_darkinel,
+            salidas_darkinel_actual,
+            "DARKINEL",
+        )
+
+        codigo_salida_darkinel = st.text_input(
+            "Codigo vendido / lectura scanner Darkinel",
+            placeholder="Ej: PE01-14-302",
+            key="codigo_salida_darkinel",
+        )
+        opciones_darkinel = pd.DataFrame()
+        opciones_darkinel_con_locacion = pd.DataFrame()
+        if codigo_salida_darkinel:
+            opciones_darkinel = buscar_en_inventario(inventario_salida_darkinel, codigo_salida_darkinel)
+            if not opciones_darkinel.empty:
+                opciones_darkinel = opciones_darkinel[
+                    opciones_darkinel["deposito"].astype(str).str.upper().eq("DARKINEL")
+                ].copy()
+                opciones_darkinel["cantidad"] = pd.to_numeric(opciones_darkinel["cantidad"], errors="coerce").fillna(0)
+                opciones_darkinel = opciones_darkinel[opciones_darkinel["cantidad"] > 0].copy()
+                opciones_darkinel_con_locacion = opciones_darkinel[
+                    opciones_darkinel["ubicacion"].astype(str).map(normalizar_locacion).apply(es_ubicacion_real)
+                ].copy()
+
+            if opciones_darkinel.empty:
+                st.warning("No encontre ese codigo con stock disponible en Darkinel.")
+            elif opciones_darkinel_con_locacion.empty:
+                st.warning("El codigo existe en Darkinel, pero todavia no tiene locacion contada. Primero cargalo en el conteo fisico Darkinel.")
+                st.dataframe(limpiar_df_visible(mostrar_inventario(opciones_darkinel)), use_container_width=True, hide_index=True)
+            else:
+                opciones_darkinel_con_locacion = opciones_darkinel_con_locacion.sort_values(
+                    ["coincidencia", "ubicacion", "articulo"],
+                    ascending=[False, True, True],
+                ).reset_index(drop=True)
+                opciones_select_darkinel = [
+                    (
+                        f"{r.codigo_normalizado} | {r.articulo} | {r.descripcion} | "
+                        f"Locacion {r.ubicacion} | Disponible {formatear_numero(r.cantidad)}"
+                    )
+                    for r in opciones_darkinel_con_locacion.itertuples()
+                ]
+                seleccion_salida_darkinel = st.selectbox(
+                    "Elegir locacion Darkinel a descontar",
+                    opciones_select_darkinel,
+                    key="salida_darkinel_locacion_select",
+                )
+                fila_salida_darkinel = opciones_darkinel_con_locacion.iloc[
+                    opciones_select_darkinel.index(seleccion_salida_darkinel)
+                ].to_dict()
+                disponible_darkinel = float(fila_salida_darkinel.get("cantidad", 0) or 0)
+                st.info(
+                    "Retirar de Darkinel: "
+                    f"{fila_salida_darkinel.get('ubicacion', '')} | "
+                    f"Disponible: {formatear_numero(disponible_darkinel)} | "
+                    f"Codigo de barras: {fila_salida_darkinel.get('articulo', '')}"
+                )
+                st.dataframe(
+                    limpiar_df_visible(mostrar_inventario(pd.DataFrame([fila_salida_darkinel]))),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                proximo_remito_darkinel = f"RD{int(st.session_state.get('remito_darkinel_seq', 0) or 0) + 1:06d}"
+                st.caption(f"Proximo remito Darkinel: {proximo_remito_darkinel}")
+                with st.form("form_salida_darkinel"):
+                    s1, s2, s3 = st.columns([1, 1.2, 1.2])
+                    cantidad_salida_darkinel = s1.number_input(
+                        "Cantidad a descontar",
+                        min_value=1.0,
+                        max_value=max(1.0, disponible_darkinel),
+                        value=1.0,
+                        step=1.0,
+                        key="cantidad_salida_darkinel",
+                    )
+                    solicitado_darkinel = s2.text_input("Solicitado por", placeholder="Nombre")
+                    responsable_darkinel = s3.text_input("Responsable entrega", placeholder="Nombre")
+                    observaciones_darkinel = st.text_input("Observaciones", placeholder="Venta / salida / ajuste")
+                    guardar_salida_darkinel = st.form_submit_button(
+                        f"Generar remito {proximo_remito_darkinel} y descontar de Darkinel",
+                        type="primary",
+                    )
+
+                if guardar_salida_darkinel:
+                    if not str(solicitado_darkinel).strip():
+                        st.error("Indica quien solicita la salida.")
+                        st.stop()
+                    if float(cantidad_salida_darkinel) > disponible_darkinel:
+                        st.error("La cantidad a descontar no puede ser mayor al disponible en esa locacion.")
+                        st.stop()
+                    st.session_state.salida_darkinel_seq = int(st.session_state.get("salida_darkinel_seq", 0) or 0) + 1
+                    st.session_state.remito_darkinel_seq = int(st.session_state.get("remito_darkinel_seq", 0) or 0) + 1
+                    remito_darkinel = f"RD{st.session_state.remito_darkinel_seq:06d}"
+                    registro_salida_darkinel = {
+                        "salida_id": st.session_state.salida_darkinel_seq,
+                        "remito_num": remito_darkinel,
+                        "fecha_hora": ahora_texto(),
+                        "solicitado_por": str(solicitado_darkinel).strip(),
+                        "responsable": str(responsable_darkinel).strip(),
+                        "codigo_normalizado": normalizar_codigo(fila_salida_darkinel.get("codigo_normalizado", "")),
+                        "codigo_barra": str(fila_salida_darkinel.get("articulo", "")).strip(),
+                        "articulo": str(fila_salida_darkinel.get("articulo", "")).strip(),
+                        "descripcion": str(fila_salida_darkinel.get("descripcion", "")).strip(),
+                        "ubicacion": normalizar_locacion(fila_salida_darkinel.get("ubicacion", "")),
+                        "cantidad": float(cantidad_salida_darkinel),
+                        "observaciones": str(observaciones_darkinel).strip(),
+                        "titulo_remito": "Remito de salida Darkinel",
+                        "deposito_origen": "DARKINEL",
+                        "deposito_destino": "Solicitante / venta",
+                        "locacion_label": "Locacion Darkinel",
+                        "firma_entrega": "Firma entrega Darkinel",
+                        "firma_recibe": "Firma recibe / solicita",
+                    }
+                    st.session_state.setdefault("salidas_darkinel", []).append(registro_salida_darkinel)
+                    st.session_state.ultimo_remito_salida_darkinel = registro_salida_darkinel
+                    guardar_salidas_darkinel_db()
+                    st.success(f"Salida Darkinel guardada. Remito {remito_darkinel} generado.")
+                    st.rerun()
+
+        ultimo_remito_darkinel = st.session_state.get("ultimo_remito_salida_darkinel")
+        if ultimo_remito_darkinel:
+            remito_num = str(ultimo_remito_darkinel.get("remito_num", "")).strip()
+            st.download_button(
+                "Descargar ultimo remito Darkinel PDF",
+                data=generar_remito_salida_pdf(ultimo_remito_darkinel),
+                file_name=f"remito_{remito_num or 'salida_darkinel'}.pdf",
+                mime="application/pdf",
+                key="descargar_ultimo_remito_darkinel",
+            )
+
+        salidas_darkinel_historial = salidas_darkinel_df()
+        st.markdown("**Historial de salidas Darkinel**")
+        if salidas_darkinel_historial.empty:
+            st.info("Todavia no hay salidas registradas desde Darkinel.")
+        else:
+            remitos_darkinel_opciones = [
+                f"{r.remito_num} | {r.fecha_hora} | {r.articulo} | {r.ubicacion} | {formatear_numero(r.cantidad)}"
+                for r in salidas_darkinel_historial.sort_values("salida_id", ascending=False).itertuples()
+            ]
+            salidas_darkinel_ordenadas = salidas_darkinel_historial.sort_values("salida_id", ascending=False).reset_index(drop=True)
+            remito_darkinel_elegido = st.selectbox(
+                "Remito Darkinel para imprimir o descargar",
+                remitos_darkinel_opciones,
+                key="remito_salida_darkinel_select",
+            )
+            remito_darkinel_row = salidas_darkinel_ordenadas.iloc[
+                remitos_darkinel_opciones.index(remito_darkinel_elegido)
+            ].to_dict()
+            remito_darkinel_num = str(remito_darkinel_row.get("remito_num", "")).strip()
+            remito_darkinel_row.update(
+                {
+                    "titulo_remito": "Remito de salida Darkinel",
+                    "deposito_origen": "DARKINEL",
+                    "deposito_destino": "Solicitante / venta",
+                    "locacion_label": "Locacion Darkinel",
+                    "firma_entrega": "Firma entrega Darkinel",
+                    "firma_recibe": "Firma recibe / solicita",
+                }
+            )
+            st.download_button(
+                "Descargar remito Darkinel seleccionado PDF",
+                data=generar_remito_salida_pdf(remito_darkinel_row),
+                file_name=f"remito_{remito_darkinel_num or 'salida_darkinel'}.pdf",
+                mime="application/pdf",
+                key="descargar_remito_darkinel_select",
+            )
+            st.dataframe(
+                limpiar_df_visible(mostrar_salidas_polo(salidas_darkinel_historial)),
+                use_container_width=True,
+                hide_index=True,
+            )
+
     st.dataframe(limpiar_df_visible(balance_actual), use_container_width=True, hide_index=True)
 
     st.subheader("STOCK_DARKINEL_ACTUALIZADO")
@@ -4892,9 +5199,13 @@ with tab_bases:
     st.subheader("SALIDAS_POLO")
     st.dataframe(limpiar_df_visible(mostrar_salidas_polo(salidas_polo_actual)), use_container_width=True, hide_index=True)
 
+    st.subheader("SALIDAS_DARKINEL")
+    st.dataframe(limpiar_df_visible(mostrar_salidas_polo(salidas_darkinel_actual)), use_container_width=True, hide_index=True)
+
 with tab_stock:
     st.subheader("Consulta de stock por codigo")
     inventario_consulta = inventario_para_buscar(stock_consolidado, df_operativo, ubicaciones_operativas, frecuencias_df, salidas_polo_actual)
+    inventario_consulta = aplicar_salidas_a_inventario(inventario_consulta, salidas_darkinel_actual, "DARKINEL")
     stock_col1, stock_col2 = st.columns(2)
     stock_col1.metric("Piezas disponibles en Darkinel", f"{piezas_darkinel_metric:,}".replace(",", "."))
     stock_col2.metric("Piezas disponibles en Polo Logistico", f"{piezas_polo_metric:,}".replace(",", "."))
