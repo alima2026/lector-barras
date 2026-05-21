@@ -2114,7 +2114,18 @@ def stock_darkinel_actualizado(stock_consolidado: pd.DataFrame, df_pick: pd.Data
     base = stock_consolidado.copy() if not stock_consolidado.empty else pd.DataFrame()
     if base.empty:
         base = pd.DataFrame(columns=["articulo", "descripcion", "estado", "unidad", "cantidad", "codigo_normalizado", "lineas_sumadas"])
+    for col, default in {
+        "articulo": "",
+        "descripcion": "",
+        "estado": "",
+        "unidad": "uni",
+        "codigo_normalizado": "",
+        "lineas_sumadas": 0,
+    }.items():
+        if col not in base.columns:
+            base[col] = default
     base["cantidad"] = pd.to_numeric(base["cantidad"], errors="coerce").fillna(0)
+    base["codigo_normalizado"] = base["codigo_normalizado"].map(normalizar_codigo)
 
     mudado = mudado_por_codigo(df_pick)
     actualizado = base.merge(mudado, on="codigo_normalizado", how="left")
@@ -2122,6 +2133,37 @@ def stock_darkinel_actualizado(stock_consolidado: pd.DataFrame, df_pick: pd.Data
     actualizado["stock_restante_darkinel"] = actualizado["cantidad"] - actualizado["mudado_al_polo"]
     actualizado["control"] = actualizado["stock_restante_darkinel"].apply(lambda x: "REVISAR: mudanza mayor al stock" if x < 0 else "OK")
     actualizado["stock_restante_darkinel"] = actualizado["stock_restante_darkinel"].clip(lower=0)
+
+    if df_pick is not None and not df_pick.empty:
+        trabajo_anexado = normalizar_df_pick(df_pick)
+        trabajo_anexado["codigo_normalizado"] = trabajo_anexado["codigo_normalizado"].map(normalizar_codigo)
+        trabajo_anexado["cantidad_mudada"] = pd.to_numeric(trabajo_anexado["cantidad_mudada"], errors="coerce").fillna(0)
+        codigos_nodum = set(base["codigo_normalizado"].dropna().astype(str).str.strip())
+        trabajo_anexado = trabajo_anexado[
+            (trabajo_anexado["codigo_normalizado"].astype(str).str.strip() != "")
+            & (~trabajo_anexado["codigo_normalizado"].isin(codigos_nodum))
+            & (trabajo_anexado["cantidad_mudada"] > 0)
+        ].copy()
+        if not trabajo_anexado.empty:
+            anexados = (
+                trabajo_anexado.groupby("codigo_normalizado", as_index=False)
+                .agg(
+                    articulo=("articulo", _primer_valor_no_vacio),
+                    descripcion=("descripcion", _primer_valor_no_vacio),
+                    unidad=("unidad", _primer_valor_no_vacio),
+                    mudado_al_polo=("cantidad_mudada", "sum"),
+                )
+            )
+            anexados["estado"] = "ANEXADO"
+            anexados["cantidad"] = 0
+            anexados["stock_restante_darkinel"] = 0
+            anexados["lineas_sumadas"] = 0
+            anexados["control"] = "ANEXADO: no existia en Nodum"
+            for col in actualizado.columns:
+                if col not in anexados.columns:
+                    anexados[col] = ""
+            actualizado = pd.concat([actualizado, anexados[actualizado.columns]], ignore_index=True)
+
     for col in ["cantidad", "mudado_al_polo", "stock_restante_darkinel"]:
         actualizado[col] = actualizado[col].apply(formatear_numero)
     return actualizado.rename(
@@ -3357,13 +3399,16 @@ ubicaciones_operativas = pd.DataFrame() if usando_control_anterior or mudanza_ac
 salidas_polo_actual = salidas_polo_df()
 stock_darkinel_metric = stock_darkinel_actualizado(stock_consolidado, df_operativo)
 stock_polo_metric = stock_polo_actualizado(df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
-piezas_darkinel_metric = int(pd.to_numeric(stock_darkinel_metric.get("Stock restante Darkinel", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
-piezas_polo_metric = int(pd.to_numeric(stock_polo_metric.get("Stock total Polo", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+stock_darkinel_metric_visible = limpiar_df_visible(stock_darkinel_metric)
+stock_polo_metric_visible = limpiar_df_visible(stock_polo_metric)
+piezas_darkinel_metric = int(pd.to_numeric(stock_darkinel_metric_visible.get("Stock restante Darkinel", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+piezas_polo_metric = int(pd.to_numeric(stock_polo_metric_visible.get("Stock total Polo", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
 piezas_nodum_metric = int(pd.to_numeric(stock_consolidado.get("cantidad", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not stock_consolidado.empty else 0
 piezas_mudanza_metric = int(pd.to_numeric(df_operativo.get("cantidad_mudada", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
 sku_nodum_metric = int((pd.to_numeric(stock_consolidado.get("cantidad", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if not stock_consolidado.empty else 0
-sku_polo_metric = int((pd.to_numeric(stock_polo_metric.get("Stock total Polo", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if not stock_polo_metric.empty else 0
-sku_darkinel_metric = int((pd.to_numeric(stock_darkinel_metric.get("Stock restante Darkinel", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if not stock_darkinel_metric.empty else 0
+sku_polo_metric = int((pd.to_numeric(stock_polo_metric_visible.get("Stock total Polo", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if not stock_polo_metric_visible.empty else 0
+sku_darkinel_metric = int((pd.to_numeric(stock_darkinel_metric_visible.get("Stock restante Darkinel", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if not stock_darkinel_metric_visible.empty else 0
+sku_anexado_metric = int(stock_darkinel_metric_visible.get("Estado", pd.Series(dtype=str)).fillna("").astype(str).str.upper().eq("ANEXADO").sum()) if not stock_darkinel_metric_visible.empty else 0
 
 if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not df_reimpresion.empty:
     st.info(f"El control anterior cargado trae {len(df_reimpresion)} lineas de mudanza.")
@@ -3382,10 +3427,11 @@ if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not
             st.success("Mudanza reemplazada por el control anterior.")
             st.rerun()
 
-sku_col1, sku_col2, sku_col3 = st.columns(3)
+sku_col1, sku_col2, sku_col3, sku_col4 = st.columns(4)
 sku_col1.metric("SKU total Nodum", f"{sku_nodum_metric:,}".replace(",", "."))
 sku_col2.metric("SKU en Polo Logistico", f"{sku_polo_metric:,}".replace(",", "."))
 sku_col3.metric("SKU restante en Darkinel", f"{sku_darkinel_metric:,}".replace(",", "."))
+sku_col4.metric("SKU anexados fuera de Nodum", f"{sku_anexado_metric:,}".replace(",", "."))
 
 pza_col1, pza_col2, pza_col3, pza_col4 = st.columns(4)
 pza_col1.metric("Piezas total Nodum", f"{piezas_nodum_metric:,}".replace(",", "."))
