@@ -4785,6 +4785,71 @@ with tab_bases:
         if not conteos_actuales.empty:
             st.markdown("**Ultimos conteos guardados**")
             st.dataframe(limpiar_df_visible(conteos_actuales.sort_values("fecha_hora", ascending=False)), use_container_width=True, hide_index=True)
+            with st.expander("Corregir o borrar un conteo guardado", expanded=False):
+                conteos_edicion = conteos_actuales.sort_values("fecha_hora", ascending=False).reset_index(drop=True)
+                opciones_conteo = [
+                    (
+                        f"{idx + 1}) {r.codigo_normalizado} | {r.articulo} | "
+                        f"{ubicacion_darkinel_detalle(r.ubicacion, r.sububicacion)} | "
+                        f"{formatear_numero(r.cantidad_contada)} pieza(s) | {r.fecha_hora}"
+                    )
+                    for idx, r in enumerate(conteos_edicion.itertuples())
+                ]
+                seleccion_conteo = st.selectbox("Linea a corregir o borrar", opciones_conteo, key="editar_conteo_darkinel_select")
+                conteo_sel = conteos_edicion.iloc[opciones_conteo.index(seleccion_conteo)].to_dict()
+                with st.form("form_editar_conteo_darkinel"):
+                    e1, e2 = st.columns([1, 1])
+                    nuevo_codigo = e1.text_input("Codigo normalizado", value=str(conteo_sel.get("codigo_normalizado", "")), key="editar_conteo_codigo")
+                    nuevo_articulo = e2.text_input("Articulo", value=str(conteo_sel.get("articulo", "")), key="editar_conteo_articulo")
+                    nueva_descripcion = st.text_input("Descripcion", value=str(conteo_sel.get("descripcion", "")), key="editar_conteo_descripcion")
+                    e3, e4, e5 = st.columns([1, 1, 1])
+                    nueva_ubicacion = e3.text_input("Locacion Darkinel", value=str(conteo_sel.get("ubicacion", "")), key="editar_conteo_ubicacion")
+                    sub_actual = normalizar_sububicacion_darkinel(conteo_sel.get("sububicacion", ""), default="ESTRELLA")
+                    sub_index = SUBUBICACIONES_DARKINEL.index(sub_actual) if sub_actual in SUBUBICACIONES_DARKINEL else 0
+                    nueva_sububicacion = e4.selectbox("Zona dentro del estante", SUBUBICACIONES_DARKINEL, index=sub_index, key="editar_conteo_sububicacion")
+                    nueva_cantidad = e5.number_input("Piezas contadas", min_value=0.0, value=float(conteo_sel.get("cantidad_contada", 0) or 0), step=1.0, key="editar_conteo_cantidad")
+                    e6, e7 = st.columns([1, 2])
+                    nuevo_contado_por = e6.text_input("Contado por", value=str(conteo_sel.get("contado_por", "")), key="editar_conteo_contado_por")
+                    nuevas_observaciones = e7.text_input("Observaciones", value=str(conteo_sel.get("observaciones", "")), key="editar_conteo_observaciones")
+                    guardar_edicion = st.form_submit_button("Guardar correccion", type="primary")
+                    borrar_conteo = st.form_submit_button("Borrar este conteo")
+
+                def coincide_conteo_guardado(item: dict) -> bool:
+                    return (
+                        normalizar_codigo(item.get("codigo_normalizado", "")) == normalizar_codigo(conteo_sel.get("codigo_normalizado", ""))
+                        and normalizar_locacion(item.get("ubicacion", "") or "SIN LOCACION") == normalizar_locacion(conteo_sel.get("ubicacion", "") or "SIN LOCACION")
+                        and normalizar_sububicacion_darkinel(item.get("sububicacion", "")) == normalizar_sububicacion_darkinel(conteo_sel.get("sububicacion", ""))
+                    )
+
+                if guardar_edicion or borrar_conteo:
+                    st.session_state.conteo_darkinel = [
+                        item for item in st.session_state.get("conteo_darkinel", [])
+                        if not coincide_conteo_guardado(item)
+                    ]
+                    if guardar_edicion:
+                        codigo_editado = normalizar_codigo(nuevo_codigo)
+                        if not codigo_editado:
+                            st.error("El codigo no puede quedar vacio.")
+                            st.stop()
+                        st.session_state.conteo_darkinel.append(
+                            {
+                                "codigo_normalizado": codigo_editado,
+                                "articulo": str(nuevo_articulo).strip().upper() or codigo_editado,
+                                "descripcion": str(nueva_descripcion).strip(),
+                                "ubicacion": normalizar_locacion(nueva_ubicacion) or "SIN LOCACION",
+                                "sububicacion": normalizar_sububicacion_darkinel(nueva_sububicacion, default="ESTRELLA"),
+                                "cantidad_contada": float(nueva_cantidad),
+                                "contado_por": str(nuevo_contado_por).strip(),
+                                "fecha_hora": ahora_texto(),
+                                "observaciones": str(nuevas_observaciones).strip(),
+                            }
+                        )
+                        st.success("Conteo corregido.")
+                    else:
+                        st.success("Conteo borrado.")
+                    guardar_conteo_darkinel_db()
+                    st.rerun()
+
             st.markdown("**PDF para imprimir por gondola / estante**")
             ubicaciones_pdf = sorted(
                 dict.fromkeys(
