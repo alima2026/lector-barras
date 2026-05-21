@@ -24,6 +24,7 @@ except ModuleNotFoundError:
 try:
     from reportlab.graphics.barcode import code128
     from reportlab.graphics.barcode import code39
+    from reportlab.graphics.shapes import Circle, Drawing, Line, Polygon, Rect, String
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -1351,8 +1352,43 @@ def salidas_polo_df() -> pd.DataFrame:
     return df[columnas]
 
 
+SUBUBICACIONES_DARKINEL = ["ESTRELLA", "CUADRADO", "CIRCULO", "TRIANGULO", "X"]
+ORDEN_SUBUBICACIONES_DARKINEL = {nombre: pos for pos, nombre in enumerate(SUBUBICACIONES_DARKINEL + ["SIN SUBDIVISION"])}
+
+
+def normalizar_sububicacion_darkinel(valor: object, default: str = "SIN SUBDIVISION") -> str:
+    texto = str(valor or "").strip().upper()
+    if not texto:
+        return default
+    aliases = {
+        "*": "ESTRELLA",
+        "STAR": "ESTRELLA",
+        "TODO": "ESTRELLA",
+        "TODO EL ESTANTE": "ESTRELLA",
+        "REDONDEL": "CIRCULO",
+        "REDONDO": "CIRCULO",
+        "CIRCULO": "CIRCULO",
+        "CIRCULO/REDONDEL": "CIRCULO",
+        "EQUIS": "X",
+        "CRUZ": "X",
+        "TRIANGULO": "TRIANGULO",
+        "CUADRADO": "CUADRADO",
+    }
+    return aliases.get(texto, texto)
+
+
+def ubicacion_darkinel_detalle(ubicacion: object, sububicacion: object) -> str:
+    ubic = str(ubicacion or "").strip().upper() or "SIN LOCACION"
+    sub = normalizar_sububicacion_darkinel(sububicacion)
+    if sub in ("", "SIN SUBDIVISION"):
+        return ubic
+    if sub == "ESTRELLA":
+        return f"{ubic} - ESTRELLA (todo el estante)"
+    return f"{ubic} - {sub}"
+
+
 def conteo_darkinel_df() -> pd.DataFrame:
-    columnas = ["codigo_normalizado", "articulo", "descripcion", "ubicacion", "cantidad_contada", "contado_por", "fecha_hora", "observaciones"]
+    columnas = ["codigo_normalizado", "articulo", "descripcion", "ubicacion", "sububicacion", "cantidad_contada", "contado_por", "fecha_hora", "observaciones"]
     df = pd.DataFrame(st.session_state.get("conteo_darkinel", []))
     if df.empty:
         return pd.DataFrame(columns=columnas)
@@ -1362,12 +1398,13 @@ def conteo_darkinel_df() -> pd.DataFrame:
     df["codigo_normalizado"] = df["codigo_normalizado"].map(normalizar_codigo)
     df["ubicacion"] = df["ubicacion"].fillna("").astype(str).str.strip().str.upper()
     df.loc[df["ubicacion"].eq(""), "ubicacion"] = "SIN LOCACION"
+    df["sububicacion"] = df["sububicacion"].map(lambda x: normalizar_sububicacion_darkinel(x))
     df["cantidad_contada"] = pd.to_numeric(df["cantidad_contada"], errors="coerce").fillna(0)
     df["fecha_hora"] = df["fecha_hora"].fillna("").astype(str)
     df = df[df["codigo_normalizado"].astype(str).str.strip() != ""].copy()
     if df.empty:
         return pd.DataFrame(columns=columnas)
-    df = df.sort_values("fecha_hora").drop_duplicates(["codigo_normalizado", "ubicacion"], keep="last")
+    df = df.sort_values("fecha_hora").drop_duplicates(["codigo_normalizado", "ubicacion", "sububicacion"], keep="last")
     return df[columnas].reset_index(drop=True)
 
 
@@ -1375,11 +1412,13 @@ def conteo_darkinel_resumen_df() -> pd.DataFrame:
     conteo = conteo_darkinel_df()
     if conteo.empty:
         return pd.DataFrame(columns=["codigo_normalizado", "cantidad_contada", "ubicaciones_darkinel"])
+    conteo = conteo.copy()
+    conteo["_ubicacion_detalle"] = conteo.apply(lambda r: ubicacion_darkinel_detalle(r.get("ubicacion"), r.get("sububicacion")), axis=1)
     resumen = (
         conteo.groupby("codigo_normalizado", as_index=False)
         .agg(
             cantidad_contada=("cantidad_contada", "sum"),
-            ubicaciones_darkinel=("ubicacion", lambda s: " / ".join(dict.fromkeys(str(x).strip().upper() for x in s if str(x).strip()))),
+            ubicaciones_darkinel=("_ubicacion_detalle", lambda s: " / ".join(dict.fromkeys(str(x).strip().upper() for x in s if str(x).strip()))),
         )
     )
     return resumen
@@ -1566,13 +1605,59 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
     return output.getvalue()
 
 
+def dibujo_estante_darkinel(loc_df: pd.DataFrame):
+    ancho = 104 * mm
+    alto = 72 * mm
+    margen_inf = 12 * mm
+    est_alto = alto - margen_inf
+    verde = colors.HexColor("#9AD80F")
+    dibujo = Drawing(ancho, alto)
+    dibujo.add(Rect(0, margen_inf, ancho, est_alto, strokeColor=colors.black, strokeWidth=1.5, fillColor=None))
+    dibujo.add(Line(ancho / 2, margen_inf, ancho / 2, margen_inf + est_alto, strokeColor=colors.black, strokeWidth=1.2))
+    dibujo.add(Line(0, margen_inf + est_alto / 2, ancho, margen_inf + est_alto / 2, strokeColor=colors.black, strokeWidth=1.2))
+
+    if loc_df is None or loc_df.empty:
+        conteos = {}
+    else:
+        conteos = (
+            loc_df.assign(sububicacion=loc_df["sububicacion"].map(normalizar_sububicacion_darkinel))
+            .groupby("sububicacion")["cantidad_contada"]
+            .sum()
+            .to_dict()
+        )
+
+    def piezas(nombre: str) -> str:
+        return formatear_numero(conteos.get(nombre, 0))
+
+    dibujo.add(String(4 * mm, margen_inf + est_alto - 8 * mm, f"CUADRADO: {piezas('CUADRADO')}", fontSize=7, fillColor=colors.black))
+    dibujo.add(Rect(17 * mm, margen_inf + est_alto * 0.64, 19 * mm, 13 * mm, strokeColor=verde, strokeWidth=2.2, fillColor=None))
+
+    dibujo.add(String(ancho / 2 + 4 * mm, margen_inf + est_alto - 8 * mm, f"CIRCULO: {piezas('CIRCULO')}", fontSize=7, fillColor=colors.black))
+    dibujo.add(Circle(ancho * 0.74, margen_inf + est_alto * 0.72, 7 * mm, strokeColor=verde, strokeWidth=2.2, fillColor=None))
+
+    dibujo.add(String(4 * mm, margen_inf + est_alto * 0.37, f"X: {piezas('X')}", fontSize=7, fillColor=colors.black))
+    x1, y1 = 23 * mm, margen_inf + est_alto * 0.22
+    dibujo.add(Line(x1 - 7 * mm, y1 - 6 * mm, x1 + 7 * mm, y1 + 6 * mm, strokeColor=verde, strokeWidth=1.8))
+    dibujo.add(Line(x1 - 7 * mm, y1 + 6 * mm, x1 + 7 * mm, y1 - 6 * mm, strokeColor=verde, strokeWidth=1.8))
+
+    dibujo.add(String(ancho / 2 + 4 * mm, margen_inf + est_alto * 0.37, f"TRIANGULO: {piezas('TRIANGULO')}", fontSize=7, fillColor=colors.black))
+    tx, ty = ancho * 0.74, margen_inf + est_alto * 0.20
+    dibujo.add(Polygon([tx, ty + 14 * mm, tx - 9 * mm, ty - 4 * mm, tx + 9 * mm, ty - 4 * mm], strokeColor=verde, strokeWidth=2.2, fillColor=None))
+
+    dibujo.add(String(0, 3 * mm, f"ESTRELLA / TODO EL ESTANTE: {piezas('ESTRELLA')}", fontSize=8, fillColor=colors.black))
+    return dibujo
+
+
 def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str = "TODAS") -> bytes:
     if not REPORTLAB_DISPONIBLE or conteos is None or conteos.empty:
         return b""
 
     trabajo = conteos.copy()
+    if "sububicacion" not in trabajo.columns:
+        trabajo["sububicacion"] = "SIN SUBDIVISION"
     trabajo["ubicacion"] = trabajo["ubicacion"].fillna("").astype(str).str.strip().str.upper()
     trabajo.loc[trabajo["ubicacion"].eq(""), "ubicacion"] = "SIN LOCACION"
+    trabajo["sububicacion"] = trabajo["sububicacion"].map(lambda x: normalizar_sububicacion_darkinel(x))
     trabajo["cantidad_contada"] = pd.to_numeric(trabajo["cantidad_contada"], errors="coerce").fillna(0)
     if ubicacion_filtro and str(ubicacion_filtro).strip().upper() != "TODAS":
         trabajo = trabajo[trabajo["ubicacion"].eq(str(ubicacion_filtro).strip().upper())].copy()
@@ -1599,7 +1684,8 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
     ubicaciones = sorted([u for u in trabajo["ubicacion"].dropna().unique().tolist() if str(u).strip()])
     for pos, ubicacion in enumerate(ubicaciones):
         loc_df = trabajo[trabajo["ubicacion"].eq(ubicacion)].copy()
-        loc_df = loc_df.sort_values(["articulo", "descripcion"]).reset_index(drop=True)
+        loc_df["_orden_sububicacion"] = loc_df["sububicacion"].map(lambda x: ORDEN_SUBUBICACIONES_DARKINEL.get(normalizar_sububicacion_darkinel(x), 99))
+        loc_df = loc_df.sort_values(["_orden_sububicacion", "articulo", "descripcion"]).reset_index(drop=True)
         total_piezas = float(loc_df["cantidad_contada"].sum())
         story.append(Paragraph(f"Gondola / Estante: {ubicacion}", titulo))
         story.append(Spacer(1, 3 * mm))
@@ -1613,26 +1699,43 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
             )
         )
         story.append(Spacer(1, 5 * mm))
+        story.append(
+            Table(
+                [[
+                    Paragraph(
+                        "Plano del estante. Si el articulo es ESTRELLA ocupa todo el estante. "
+                        "Si no, va en la zona marcada: CUADRADO, CIRCULO, X o TRIANGULO.",
+                        normal,
+                    ),
+                    dibujo_estante_darkinel(loc_df),
+                ]],
+                colWidths=[78 * mm, 108 * mm],
+            )
+        )
+        story.append(Spacer(1, 5 * mm))
 
         rows = [[
             Paragraph("<b>Codigo articulo</b>", header_style),
             Paragraph("<b>Descripcion</b>", header_style),
             Paragraph("<b>Cantidad</b>", header_style),
             Paragraph("<b>Ubicacion exacta</b>", header_style),
+            Paragraph("<b>Zona estante</b>", header_style),
             Paragraph("<b>Contado por / fecha</b>", header_style),
         ]]
         for row in loc_df.itertuples():
             contado_por = str(getattr(row, "contado_por", "") or "").strip()
             fecha = str(getattr(row, "fecha_hora", "") or "").strip()
+            sububicacion = normalizar_sububicacion_darkinel(getattr(row, "sububicacion", ""))
             rows.append([
                 Paragraph(_html_escape(str(getattr(row, "articulo", "") or getattr(row, "codigo_normalizado", ""))), chico),
                 Paragraph(_html_escape(str(getattr(row, "descripcion", "") or "")), chico),
                 Paragraph(_html_escape(formatear_numero(getattr(row, "cantidad_contada", 0))), chico),
-                Paragraph(_html_escape(ubicacion), chico),
+                Paragraph(_html_escape(ubicacion_darkinel_detalle(ubicacion, sububicacion)), chico),
+                Paragraph(_html_escape(sububicacion), chico),
                 Paragraph(_html_escape(" / ".join([x for x in [contado_por, fecha] if x])), chico),
             ])
 
-        tabla = Table(rows, colWidths=[36 * mm, 68 * mm, 22 * mm, 34 * mm, 34 * mm], repeatRows=1)
+        tabla = Table(rows, colWidths=[31 * mm, 58 * mm, 18 * mm, 38 * mm, 25 * mm, 25 * mm], repeatRows=1)
         tabla.setStyle(
             TableStyle(
                 [
@@ -4488,11 +4591,20 @@ with tab_bases:
     balance_actual = balance_darkinel_polo(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
     st.caption("Balance por codigo: Stock Nodum del dia contra lo real contado: piezas disponibles en Polo + conteo fisico en Darkinel. La diferencia genera alta o baja sugerida.")
     with st.expander("Conteo fisico de piezas que quedan en Darkinel", expanded=False):
-        st.caption("Escanea o digita el codigo, informa la locacion en Darkinel, conta las piezas reales y guarda el conteo. Si el articulo esta en mas de una locacion, cargalo una vez por cada locacion.")
+        st.caption("Escanea o digita el codigo, informa la locacion en Darkinel, conta las piezas reales y guarda el conteo. Formato recomendado: Rack-Puerta-Estante, por ejemplo 1-1-A. Si el articulo esta en mas de una locacion o subzona, cargalo una vez por cada lugar.")
         codigo_conteo = st.text_input("Codigo contado en Darkinel", placeholder="Ej: PE01-14-302", key="codigo_conteo_darkinel")
         codigo_norm_conteo = normalizar_codigo(codigo_conteo) if codigo_conteo else ""
-        ubicacion_conteo = st.text_input("Locacion Darkinel", placeholder="Ej: D-01-03", key="ubicacion_conteo_darkinel").strip().upper()
+        ubicacion_conteo = st.text_input("Locacion Darkinel", placeholder="Ej: 1-1-A", help="Rack-Puerta-Estante. Ejemplo: 1-1-A.", key="ubicacion_conteo_darkinel").strip().upper()
         ubicacion_clave_conteo = ubicacion_conteo or "SIN LOCACION"
+        sububicacion_conteo = normalizar_sububicacion_darkinel(
+            st.selectbox(
+                "Zona dentro del estante",
+                SUBUBICACIONES_DARKINEL,
+                help="ESTRELLA = ocupa todo el estante. Si no es estrella, elegi la subdivision: CUADRADO, CIRCULO, TRIANGULO o X.",
+                key="sububicacion_conteo_darkinel",
+            ),
+            default="ESTRELLA",
+        )
         fila_balance_conteo = pd.DataFrame()
         if codigo_norm_conteo:
             fila_balance_conteo = balance_actual[balance_actual["Codigo normalizado"].astype(str).map(normalizar_codigo).eq(codigo_norm_conteo)].copy()
@@ -4519,6 +4631,7 @@ with tab_bases:
             previos = conteos_actuales[
                 conteos_actuales["codigo_normalizado"].eq(codigo_norm_conteo)
                 & conteos_actuales["ubicacion"].eq(ubicacion_clave_conteo)
+                & conteos_actuales["sububicacion"].eq(sububicacion_conteo)
             ]
             if not previos.empty:
                 conteo_previo = float(previos.iloc[0]["cantidad_contada"])
@@ -4544,6 +4657,7 @@ with tab_bases:
                 "articulo": articulo_conteo,
                 "descripcion": descripcion_conteo,
                 "ubicacion": ubicacion_clave_conteo,
+                "sububicacion": sububicacion_conteo,
                 "cantidad_contada": float(cantidad_contada),
                 "contado_por": str(contado_por).strip(),
                 "fecha_hora": ahora_texto(),
@@ -4554,11 +4668,12 @@ with tab_bases:
                 if not (
                     normalizar_codigo(item.get("codigo_normalizado", "")) == codigo_norm_conteo
                     and str(item.get("ubicacion", "") or "SIN LOCACION").strip().upper() == ubicacion_clave_conteo
+                    and normalizar_sububicacion_darkinel(item.get("sububicacion", "")) == sububicacion_conteo
                 )
             ]
             st.session_state.conteo_darkinel.append(registro_conteo)
             guardar_conteo_darkinel_db()
-            st.success(f"Conteo guardado para {articulo_conteo} en {ubicacion_clave_conteo}: {formatear_numero(cantidad_contada)} pieza(s).")
+            st.success(f"Conteo guardado para {articulo_conteo} en {ubicacion_darkinel_detalle(ubicacion_clave_conteo, sububicacion_conteo)}: {formatear_numero(cantidad_contada)} pieza(s).")
             st.rerun()
 
         if not conteos_actuales.empty:
