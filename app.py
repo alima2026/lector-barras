@@ -1143,10 +1143,64 @@ def inventario_para_buscar(
                     "articulo": darkinel[art_col].astype(str).str.strip(),
                     "descripcion": darkinel[desc_col].astype(str).str.strip() if desc_col else "",
                     "deposito": "DARKINEL",
-                    "ubicacion": "DARKINEL",
+                    "ubicacion": "SIN LOCACION REGISTRADA",
                     "cantidad": pd.to_numeric(darkinel[stock_col], errors="coerce").fillna(0),
                 }
             )
+            dark = dark[dark["cantidad"] > 0].copy()
+            conteo_darkinel = conteo_darkinel_df()
+            if not dark.empty and not conteo_darkinel.empty:
+                conteo_darkinel = conteo_darkinel.copy()
+                conteo_darkinel["_ubicacion_detalle"] = conteo_darkinel.apply(
+                    lambda r: ubicacion_darkinel_detalle(r.get("ubicacion"), r.get("sububicacion")),
+                    axis=1,
+                )
+                conteo_locaciones = (
+                    conteo_darkinel.groupby(["codigo_normalizado", "_ubicacion_detalle"], as_index=False)
+                    .agg(
+                        cantidad=("cantidad_contada", "sum"),
+                        articulo=("articulo", "first"),
+                        descripcion=("descripcion", "first"),
+                    )
+                    .rename(columns={"_ubicacion_detalle": "ubicacion"})
+                )
+                conteo_locaciones = conteo_locaciones[conteo_locaciones["cantidad"] > 0].copy()
+                codigos_contados = set(conteo_locaciones["codigo_normalizado"].astype(str))
+                if codigos_contados:
+                    maestro_dark = dark[["codigo_normalizado", "articulo", "descripcion", "cantidad"]].copy()
+                    conteo_locaciones = conteo_locaciones.merge(
+                        maestro_dark.rename(columns={"cantidad": "_stock_darkinel"}),
+                        on="codigo_normalizado",
+                        how="left",
+                        suffixes=("_conteo", "_stock"),
+                    )
+                    conteo_locaciones["articulo"] = conteo_locaciones["articulo_stock"].fillna("").where(
+                        conteo_locaciones["articulo_stock"].fillna("").astype(str).str.strip().ne(""),
+                        conteo_locaciones["articulo_conteo"],
+                    )
+                    conteo_locaciones["descripcion"] = conteo_locaciones["descripcion_stock"].fillna("").where(
+                        conteo_locaciones["descripcion_stock"].fillna("").astype(str).str.strip().ne(""),
+                        conteo_locaciones["descripcion_conteo"],
+                    )
+                    conteo_locaciones["deposito"] = "DARKINEL"
+                    conteo_locaciones = conteo_locaciones[
+                        ["codigo_normalizado", "articulo", "descripcion", "deposito", "ubicacion", "cantidad"]
+                    ]
+                    total_contado = conteo_locaciones.groupby("codigo_normalizado")["cantidad"].sum().to_dict()
+                    pendientes = dark[dark["codigo_normalizado"].isin(codigos_contados)].copy()
+                    pendientes["cantidad"] = pendientes.apply(
+                        lambda r: max(float(r["cantidad"]) - float(total_contado.get(r["codigo_normalizado"], 0) or 0), 0),
+                        axis=1,
+                    )
+                    pendientes = pendientes[pendientes["cantidad"] > 0].copy()
+                    dark = pd.concat(
+                        [
+                            dark[~dark["codigo_normalizado"].isin(codigos_contados)],
+                            conteo_locaciones,
+                            pendientes,
+                        ],
+                        ignore_index=True,
+                    )
             partes.append(dark[dark["cantidad"] > 0].copy())
 
     trabajo_polo = normalizar_df_pick(df_pick) if df_pick is not None and not df_pick.empty and (salidas is None or salidas.empty) else pd.DataFrame()
@@ -1634,9 +1688,9 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
 
 
 def dibujo_estante_darkinel(loc_df: pd.DataFrame):
-    ancho = 104 * mm
-    alto = 72 * mm
-    margen_inf = 12 * mm
+    ancho = 78 * mm
+    alto = 52 * mm
+    margen_inf = 7 * mm
     est_alto = alto - margen_inf
     verde = colors.HexColor("#9AD80F")
     dibujo = Drawing(ancho, alto)
@@ -1660,32 +1714,32 @@ def dibujo_estante_darkinel(loc_df: pd.DataFrame):
         cx, cy = ancho / 2, margen_inf + est_alto / 2
         puntos = []
         for i in range(10):
-            radio = 24 * mm if i % 2 == 0 else 10 * mm
+            radio = 15 * mm if i % 2 == 0 else 6.5 * mm
             angulo = math.radians(-90 + i * 36)
             puntos.extend([cx + radio * math.cos(angulo), cy + radio * math.sin(angulo)])
         dibujo.add(Polygon(puntos, strokeColor=verde, strokeWidth=2.4, fillColor=None))
-        dibujo.add(String(6 * mm, margen_inf + est_alto - 8 * mm, f"ESTRELLA / TODO EL ESTANTE: {piezas('ESTRELLA')}", fontSize=8, fillColor=colors.black))
+        dibujo.add(String(5 * mm, margen_inf + est_alto - 6 * mm, f"ESTRELLA / TODO EL ESTANTE: {piezas('ESTRELLA')}", fontSize=7, fillColor=colors.black))
         return dibujo
 
     dibujo.add(Line(ancho / 2, margen_inf, ancho / 2, margen_inf + est_alto, strokeColor=colors.black, strokeWidth=1.2))
     dibujo.add(Line(0, margen_inf + est_alto / 2, ancho, margen_inf + est_alto / 2, strokeColor=colors.black, strokeWidth=1.2))
 
-    dibujo.add(String(4 * mm, margen_inf + est_alto - 8 * mm, f"CUADRADO: {piezas('CUADRADO')}", fontSize=7, fillColor=colors.black))
-    dibujo.add(Rect(17 * mm, margen_inf + est_alto * 0.64, 19 * mm, 13 * mm, strokeColor=verde, strokeWidth=2.2, fillColor=None))
+    dibujo.add(String(3 * mm, margen_inf + est_alto - 6 * mm, f"CUADRADO: {piezas('CUADRADO')}", fontSize=6.5, fillColor=colors.black))
+    dibujo.add(Rect(13 * mm, margen_inf + est_alto * 0.64, 14 * mm, 10 * mm, strokeColor=verde, strokeWidth=2.0, fillColor=None))
 
-    dibujo.add(String(ancho / 2 + 4 * mm, margen_inf + est_alto - 8 * mm, f"CIRCULO: {piezas('CIRCULO')}", fontSize=7, fillColor=colors.black))
-    dibujo.add(Circle(ancho * 0.74, margen_inf + est_alto * 0.72, 7 * mm, strokeColor=verde, strokeWidth=2.2, fillColor=None))
+    dibujo.add(String(ancho / 2 + 3 * mm, margen_inf + est_alto - 6 * mm, f"CIRCULO: {piezas('CIRCULO')}", fontSize=6.5, fillColor=colors.black))
+    dibujo.add(Circle(ancho * 0.74, margen_inf + est_alto * 0.72, 5.5 * mm, strokeColor=verde, strokeWidth=2.0, fillColor=None))
 
-    dibujo.add(String(4 * mm, margen_inf + est_alto * 0.37, f"X: {piezas('X')}", fontSize=7, fillColor=colors.black))
-    x1, y1 = 23 * mm, margen_inf + est_alto * 0.22
-    dibujo.add(Line(x1 - 7 * mm, y1 - 6 * mm, x1 + 7 * mm, y1 + 6 * mm, strokeColor=verde, strokeWidth=1.8))
-    dibujo.add(Line(x1 - 7 * mm, y1 + 6 * mm, x1 + 7 * mm, y1 - 6 * mm, strokeColor=verde, strokeWidth=1.8))
+    dibujo.add(String(3 * mm, margen_inf + est_alto * 0.37, f"X: {piezas('X')}", fontSize=6.5, fillColor=colors.black))
+    x1, y1 = 18 * mm, margen_inf + est_alto * 0.22
+    dibujo.add(Line(x1 - 5.5 * mm, y1 - 5 * mm, x1 + 5.5 * mm, y1 + 5 * mm, strokeColor=verde, strokeWidth=1.7))
+    dibujo.add(Line(x1 - 5.5 * mm, y1 + 5 * mm, x1 + 5.5 * mm, y1 - 5 * mm, strokeColor=verde, strokeWidth=1.7))
 
-    dibujo.add(String(ancho / 2 + 4 * mm, margen_inf + est_alto * 0.37, f"TRIANGULO: {piezas('TRIANGULO')}", fontSize=7, fillColor=colors.black))
+    dibujo.add(String(ancho / 2 + 3 * mm, margen_inf + est_alto * 0.37, f"TRIANGULO: {piezas('TRIANGULO')}", fontSize=6.5, fillColor=colors.black))
     tx, ty = ancho * 0.74, margen_inf + est_alto * 0.20
-    dibujo.add(Polygon([tx, ty + 14 * mm, tx - 9 * mm, ty - 4 * mm, tx + 9 * mm, ty - 4 * mm], strokeColor=verde, strokeWidth=2.2, fillColor=None))
+    dibujo.add(Polygon([tx, ty + 10 * mm, tx - 7 * mm, ty - 3 * mm, tx + 7 * mm, ty - 3 * mm], strokeColor=verde, strokeWidth=2.0, fillColor=None))
 
-    dibujo.add(String(0, 3 * mm, f"ESTRELLA / TODO EL ESTANTE: {piezas('ESTRELLA')}", fontSize=8, fillColor=colors.black))
+    dibujo.add(String(0, 2 * mm, f"ESTRELLA / TODO EL ESTANTE: {piezas('ESTRELLA')}", fontSize=7, fillColor=colors.black))
     return dibujo
 
 
@@ -1720,6 +1774,7 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
     normal = styles["BodyText"]
     chico = ParagraphStyle("GondolaSmall", parent=normal, fontSize=8, leading=10)
     header_style = ParagraphStyle("GondolaHeader", parent=normal, fontSize=10, leading=12)
+    barcode_text_style = ParagraphStyle("GondolaBarcodeText", parent=chico, alignment=1)
 
     story = []
     ubicaciones = sorted([u for u in trabajo["ubicacion"].dropna().unique().tolist() if str(u).strip()])
@@ -1751,7 +1806,7 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
                     ),
                     dibujo_estante_darkinel(loc_df),
                 ]],
-                colWidths=[78 * mm, 108 * mm],
+                colWidths=[88 * mm, 82 * mm],
             )
         )
         story.append(Spacer(1, 5 * mm))
@@ -1770,9 +1825,11 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
             sububicacion = normalizar_sububicacion_darkinel(getattr(row, "sububicacion", ""))
             articulo_pdf = str(getattr(row, "articulo", "") or getattr(row, "codigo_normalizado", "") or "").strip()
             codigo_barra_pdf = codigo_barra_articulo(articulo_pdf) or normalizar_codigo(articulo_pdf) or "SIN-CODIGO"
+            barcode = code128.Code128(codigo_barra_pdf, barHeight=9 * mm, barWidth=0.22 * mm, humanReadable=False)
+            barcode.hAlign = "CENTER"
             barcode_cell = [
-                code128.Code128(codigo_barra_pdf, barHeight=9 * mm, barWidth=0.22 * mm, humanReadable=False),
-                Paragraph(_html_escape(codigo_barra_pdf), chico),
+                barcode,
+                Paragraph(_html_escape(codigo_barra_pdf), barcode_text_style),
             ]
             rows.append([
                 Paragraph(_html_escape(articulo_pdf), chico),
@@ -1793,6 +1850,7 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                     ("FONTSIZE", (0, 0), (-1, -1), 8),
                     ("ALIGN", (2, 1), (2, -1), "RIGHT"),
+                    ("ALIGN", (3, 1), (3, -1), "CENTER"),
                     ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
                     ("TOPPADDING", (0, 0), (-1, -1), 5),
                 ]
