@@ -467,6 +467,33 @@ def normalizar_codigo(valor) -> str:
     return re.sub(r"[^A-Z0-9]", "", texto)
 
 
+def normalizar_locacion(valor) -> str:
+    if pd.isna(valor):
+        return ""
+    texto = str(valor).strip().upper()
+    if not texto:
+        return ""
+    if texto in {"PENDIENTE", "SIN LOCACION", "SIN LOCACION REGISTRADA", "DARKINEL", "NAN"}:
+        return texto
+    separadores = {
+        "'": "-",
+        '"': "-",
+        "`": "-",
+        chr(180): "-",
+        chr(8216): "-",
+        chr(8217): "-",
+        chr(8220): "-",
+        chr(8221): "-",
+        chr(8242): "-",
+        chr(8243): "-",
+    }
+    texto = texto.translate(str.maketrans(separadores))
+    texto = re.sub(r"\s*[-/\\|]\s*", "-", texto)
+    texto = re.sub(r"\s+", "-", texto)
+    texto = re.sub(r"-+", "-", texto).strip("-")
+    return texto
+
+
 def agregar_unico(lista: List[str], valor: str) -> None:
     valor = normalizar_codigo(valor)
     if valor and valor not in lista:
@@ -1129,7 +1156,7 @@ def inventario_para_buscar(
                 "articulo": trabajo_polo["articulo"].astype(str).str.strip(),
                 "descripcion": trabajo_polo["descripcion"].astype(str).str.strip(),
                 "deposito": "POLO LOGISTICO",
-                "ubicacion": trabajo_polo["ubicacion"].astype(str).str.strip().str.upper(),
+                "ubicacion": trabajo_polo["ubicacion"].map(normalizar_locacion),
                 "cantidad": pd.to_numeric(trabajo_polo["cantidad_mudada"], errors="coerce").fillna(0),
             }
         )
@@ -1156,7 +1183,7 @@ def inventario_para_buscar(
                     "articulo": ubicaciones[art_col].astype(str).str.strip(),
                     "descripcion": ubicaciones[desc_col].astype(str).str.strip() if desc_col else "",
                     "deposito": "POLO LOGISTICO",
-                    "ubicacion": ubicaciones[ubic_col].astype(str).str.strip().str.upper(),
+                    "ubicacion": ubicaciones[ubic_col].map(normalizar_locacion),
                     "cantidad": pd.to_numeric(ubicaciones[piezas_col], errors="coerce").fillna(0),
                 }
             )
@@ -1260,7 +1287,7 @@ def detalle_pallets_polo_consulta(
             "Descripcion": ubicaciones[desc_col].astype(str).str.strip() if desc_col else "",
             "Pallet": pd.to_numeric(ubicaciones[pallet_col], errors="coerce").fillna(0).astype(int) if pallet_col else 0,
             "Caja": pd.to_numeric(ubicaciones[caja_col], errors="coerce").fillna(0).astype(int) if caja_col else "",
-            "Locacion": ubicaciones[ubic_col].astype(str).str.strip().str.upper(),
+            "Locacion": ubicaciones[ubic_col].map(normalizar_locacion),
             "Piezas": pd.to_numeric(ubicaciones[piezas_col], errors="coerce").fillna(0),
             "Fecha/Hora": ubicaciones[fecha_col].astype(str).str.strip() if fecha_col else "",
             "Observaciones": ubicaciones[obs_col].astype(str).str.strip() if obs_col else "",
@@ -1347,7 +1374,7 @@ def salidas_polo_df() -> pd.DataFrame:
     df["codigo_barra"] = df["codigo_barra"].fillna("").astype(str).str.strip()
     df.loc[df["codigo_barra"].eq(""), "codigo_barra"] = df["articulo"]
     df.loc[df["codigo_barra"].eq(""), "codigo_barra"] = df["codigo_normalizado"]
-    df["ubicacion"] = df["ubicacion"].fillna("").astype(str).str.strip().str.upper()
+    df["ubicacion"] = df["ubicacion"].map(normalizar_locacion)
     df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
     return df[columnas]
 
@@ -1378,7 +1405,7 @@ def normalizar_sububicacion_darkinel(valor: object, default: str = "SIN SUBDIVIS
 
 
 def ubicacion_darkinel_detalle(ubicacion: object, sububicacion: object) -> str:
-    ubic = str(ubicacion or "").strip().upper() or "SIN LOCACION"
+    ubic = normalizar_locacion(ubicacion) or "SIN LOCACION"
     sub = normalizar_sububicacion_darkinel(sububicacion)
     if sub in ("", "SIN SUBDIVISION"):
         return ubic
@@ -1396,7 +1423,7 @@ def conteo_darkinel_df() -> pd.DataFrame:
         if col not in df.columns:
             df[col] = "" if col != "cantidad_contada" else 0
     df["codigo_normalizado"] = df["codigo_normalizado"].map(normalizar_codigo)
-    df["ubicacion"] = df["ubicacion"].fillna("").astype(str).str.strip().str.upper()
+    df["ubicacion"] = df["ubicacion"].map(normalizar_locacion)
     df.loc[df["ubicacion"].eq(""), "ubicacion"] = "SIN LOCACION"
     df["sububicacion"] = df["sububicacion"].map(lambda x: normalizar_sububicacion_darkinel(x))
     df["cantidad_contada"] = pd.to_numeric(df["cantidad_contada"], errors="coerce").fillna(0)
@@ -1655,12 +1682,12 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
     trabajo = conteos.copy()
     if "sububicacion" not in trabajo.columns:
         trabajo["sububicacion"] = "SIN SUBDIVISION"
-    trabajo["ubicacion"] = trabajo["ubicacion"].fillna("").astype(str).str.strip().str.upper()
+    trabajo["ubicacion"] = trabajo["ubicacion"].map(normalizar_locacion)
     trabajo.loc[trabajo["ubicacion"].eq(""), "ubicacion"] = "SIN LOCACION"
     trabajo["sububicacion"] = trabajo["sububicacion"].map(lambda x: normalizar_sububicacion_darkinel(x))
     trabajo["cantidad_contada"] = pd.to_numeric(trabajo["cantidad_contada"], errors="coerce").fillna(0)
     if ubicacion_filtro and str(ubicacion_filtro).strip().upper() != "TODAS":
-        trabajo = trabajo[trabajo["ubicacion"].eq(str(ubicacion_filtro).strip().upper())].copy()
+        trabajo = trabajo[trabajo["ubicacion"].eq(normalizar_locacion(ubicacion_filtro))].copy()
     if trabajo.empty:
         return b""
 
@@ -1683,16 +1710,17 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
     story = []
     ubicaciones = sorted([u for u in trabajo["ubicacion"].dropna().unique().tolist() if str(u).strip()])
     for pos, ubicacion in enumerate(ubicaciones):
-        loc_df = trabajo[trabajo["ubicacion"].eq(ubicacion)].copy()
+        ubicacion_pdf = normalizar_locacion(ubicacion)
+        loc_df = trabajo[trabajo["ubicacion"].map(normalizar_locacion).eq(ubicacion_pdf)].copy()
         loc_df["_orden_sububicacion"] = loc_df["sububicacion"].map(lambda x: ORDEN_SUBUBICACIONES_DARKINEL.get(normalizar_sububicacion_darkinel(x), 99))
         loc_df = loc_df.sort_values(["_orden_sububicacion", "articulo", "descripcion"]).reset_index(drop=True)
         total_piezas = float(loc_df["cantidad_contada"].sum())
-        story.append(Paragraph(f"Gondola / Estante: {ubicacion}", titulo))
+        story.append(Paragraph(f"Gondola / Estante: {ubicacion_pdf}", titulo))
         story.append(Spacer(1, 3 * mm))
         story.append(
             Table(
                 [
-                    [Paragraph("<b>Locacion exacta</b>", normal), ubicacion, Paragraph("<b>Total piezas</b>", normal), formatear_numero(total_piezas)],
+                    [Paragraph("<b>Locacion exacta</b>", normal), ubicacion_pdf, Paragraph("<b>Total piezas</b>", normal), formatear_numero(total_piezas)],
                     [Paragraph("<b>Fecha impresion</b>", normal), ahora_texto(), Paragraph("<b>Lineas</b>", normal), str(len(loc_df))],
                 ],
                 colWidths=[34 * mm, 70 * mm, 32 * mm, 50 * mm],
@@ -1730,7 +1758,7 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
                 Paragraph(_html_escape(str(getattr(row, "articulo", "") or getattr(row, "codigo_normalizado", ""))), chico),
                 Paragraph(_html_escape(str(getattr(row, "descripcion", "") or "")), chico),
                 Paragraph(_html_escape(formatear_numero(getattr(row, "cantidad_contada", 0))), chico),
-                Paragraph(_html_escape(ubicacion_darkinel_detalle(ubicacion, sububicacion)), chico),
+                Paragraph(_html_escape(ubicacion_darkinel_detalle(ubicacion_pdf, sububicacion)), chico),
                 Paragraph(_html_escape(sububicacion), chico),
                 Paragraph(_html_escape(" / ".join([x for x in [contado_por, fecha] if x])), chico),
             ])
@@ -1771,12 +1799,12 @@ def aplicar_salidas_a_ubicaciones(ubicaciones: pd.DataFrame, salidas: pd.DataFra
         return trabajo
 
     trabajo["_codigo_salida"] = trabajo[norm_col].map(normalizar_codigo)
-    trabajo["_ubicacion_salida"] = trabajo[ubic_col].fillna("").astype(str).str.strip().str.upper()
+    trabajo["_ubicacion_salida"] = trabajo[ubic_col].map(normalizar_locacion)
     trabajo["_piezas_num"] = pd.to_numeric(trabajo[piezas_col], errors="coerce").fillna(0)
 
     sal = salidas.copy()
     sal["codigo_normalizado"] = sal["codigo_normalizado"].map(normalizar_codigo)
-    sal["ubicacion"] = sal["ubicacion"].fillna("").astype(str).str.strip().str.upper()
+    sal["ubicacion"] = sal["ubicacion"].map(normalizar_locacion)
     sal["cantidad"] = pd.to_numeric(sal["cantidad"], errors="coerce").fillna(0)
     salidas_por_locacion = sal.groupby(["codigo_normalizado", "ubicacion"])["cantidad"].sum().to_dict()
 
@@ -1813,7 +1841,7 @@ def firma_lineas_mudanza(df: pd.DataFrame) -> set:
                 entero_seguro(getattr(row, "pallet", 0), 0),
                 entero_seguro(getattr(row, "bulto", 0), 0),
                 numero_seguro(getattr(row, "cantidad_mudada", 0), 0),
-                str(getattr(row, "ubicacion", "")).strip().upper(),
+                normalizar_locacion(getattr(row, "ubicacion", "")),
             )
         )
     return set(claves)
@@ -2092,9 +2120,9 @@ def normalizar_df_pick(df: pd.DataFrame) -> pd.DataFrame:
     trabajo["cantidad_recibida"] = pd.to_numeric(trabajo["cantidad_recibida"], errors="coerce")
     trabajo["cantidad_recibida"] = trabajo["cantidad_recibida"].fillna(trabajo["cantidad_mudada"])
     trabajo["stock_total"] = pd.to_numeric(trabajo["stock_total"], errors="coerce").fillna(0)
-    trabajo["ubicacion"] = trabajo["ubicacion"].fillna("").astype(str).str.strip().str.upper()
+    trabajo["ubicacion"] = trabajo["ubicacion"].map(normalizar_locacion)
     trabajo.loc[trabajo["ubicacion"] == "", "ubicacion"] = "PENDIENTE"
-    trabajo["ubicacion_recepcion"] = trabajo["ubicacion_recepcion"].fillna("").astype(str).str.strip().str.upper()
+    trabajo["ubicacion_recepcion"] = trabajo["ubicacion_recepcion"].map(normalizar_locacion)
     trabajo["recepcion_ok"] = trabajo["recepcion_ok"].fillna(False).astype(bool)
     return trabajo
 
@@ -2144,7 +2172,7 @@ def agregar_item_a_mudanza(
             "bulto": int(bulto),
             "cantidades_bulto": cantidades_bulto_norm,
             "bultos_item": bultos_desde_distribucion(cantidades_bulto_norm, cantidad_mudada, bulto),
-            "ubicacion": str(ubicacion).strip().upper() or "PENDIENTE",
+            "ubicacion": normalizar_locacion(ubicacion) or "PENDIENTE",
             "lectura_scanner": str(lectura_original).strip(),
             "articulo": str(row.get("articulo", "")).strip(),
             "descripcion": str(row.get("descripcion", "")).strip(),
@@ -2248,7 +2276,7 @@ def parsear_lineas_pallet_faltante(texto: str) -> list[dict]:
 
 
 def actualizar_ubicacion_item(item_id: int, nueva_ubicacion: str) -> Tuple[bool, str]:
-    ubicacion = str(nueva_ubicacion).strip().upper() or "PENDIENTE"
+    ubicacion = normalizar_locacion(nueva_ubicacion) or "PENDIENTE"
     for item in st.session_state.pick_items:
         if int(item.get("item_id", 0)) == int(item_id):
             item["ubicacion"] = ubicacion
@@ -2298,7 +2326,7 @@ def actualizar_linea_item(
             item["cantidad_mudada"] = float(nueva_cantidad)
             item["cantidades_bulto"] = cantidades_norm
             item["bultos_item"] = bultos_desde_distribucion(item["cantidades_bulto"], nueva_cantidad, nuevo_bulto)
-            item["ubicacion"] = str(nueva_ubicacion).strip().upper() or "PENDIENTE"
+            item["ubicacion"] = normalizar_locacion(nueva_ubicacion) or "PENDIENTE"
             if stock_darkinel_restante is not None:
                 item["stock_total"] = float(nueva_cantidad) + float(stock_darkinel_restante)
                 obs = str(item.get("observaciones", "")).strip()
@@ -2574,7 +2602,7 @@ def canonizar_mudanza_recepcion(df_pick: pd.DataFrame) -> pd.DataFrame:
         trabajo["ubicacion_recepcion"].apply(es_ubicacion_real),
         trabajo["ubicacion"],
     )
-    trabajo["_ubicacion_final"] = trabajo["_ubicacion_final"].fillna("").astype(str).str.strip().str.upper()
+    trabajo["_ubicacion_final"] = trabajo["_ubicacion_final"].map(normalizar_locacion)
     trabajo.loc[~trabajo["_ubicacion_final"].apply(es_ubicacion_real), "_ubicacion_final"] = "PENDIENTE"
 
     ubicaciones_por_pallet = {}
@@ -2975,7 +3003,7 @@ def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.D
     combinado = combinado.loc[~(identidad_vacia & ubicacion_vacia)].copy()
     if combinado.empty:
         return pd.DataFrame(columns=columnas)
-    ubicacion_upper = combinado["Ubicacion"].astype(str).str.strip().str.upper()
+    ubicacion_upper = combinado["Ubicacion"].map(normalizar_locacion)
     ubicaciones_por_pallet = {}
     for pallet, grupo in combinado.groupby("Pallet", dropna=False):
         reales = [
@@ -2988,7 +3016,7 @@ def ubicacion_polo_logistico(df_pick: pd.DataFrame, ubicaciones_anteriores: pd.D
     if ubicaciones_por_pallet:
         pendientes = ~combinado["Ubicacion"].apply(es_ubicacion_real)
         combinado.loc[pendientes, "Ubicacion"] = combinado.loc[pendientes, "Pallet"].map(ubicaciones_por_pallet).fillna(combinado.loc[pendientes, "Ubicacion"])
-        ubicacion_upper = combinado["Ubicacion"].astype(str).str.strip().str.upper()
+        ubicacion_upper = combinado["Ubicacion"].map(normalizar_locacion)
     combinado["_ubicacion_real"] = (~ubicacion_upper.isin(["", "PENDIENTE", "NAN"])).astype(int)
     combinado["_fuente_actual"] = pd.to_numeric(combinado["_fuente_actual"], errors="coerce").fillna(0).astype(int)
     combinado["_orden_original"] = range(len(combinado))
@@ -4150,7 +4178,7 @@ with tab_pallets:
                 piezas_enviadas = row.get("Piezas en esta caja", row.get("Piezas enviadas", row.get("Cantidad mudada", 0)))
                 item["cantidades_bulto"] = normalizar_cantidades_por_bulto(f"Caja {item['bulto']} = Cantidad {piezas_enviadas}", piezas_enviadas, item["bulto"])
                 item["bultos_item"] = bultos_desde_distribucion(item["cantidades_bulto"], piezas_enviadas, item["bulto"])
-                item["ubicacion"] = str(row.get("Ubicacion", "")).strip().upper() or "PENDIENTE"
+                item["ubicacion"] = normalizar_locacion(row.get("Ubicacion", "")) or "PENDIENTE"
                 item["lectura_scanner"] = str(row.get("Lectura scanner", "")).strip()
                 item["articulo"] = str(row.get("Articulo", "")).strip()
                 item["descripcion"] = str(row.get("Descripcion", "")).strip()
@@ -4370,7 +4398,7 @@ with tab_recepcion:
         ubicaciones_reales = [u for u in ubicaciones_existentes.unique().tolist() if u and u not in ["PENDIENTE", "NAN"]]
         ubicacion_sugerida = ubicaciones_reales[0] if len(ubicaciones_reales) == 1 else ""
         ubicacion_pallet = pr2.text_input("Ubicacion unica del pallet", value=ubicacion_sugerida, placeholder="Ej: 1-L-3")
-        ubicacion_pallet_norm = str(ubicacion_pallet).strip().upper()
+        ubicacion_pallet_norm = normalizar_locacion(ubicacion_pallet)
         receptor_pallet = pr3.text_input("Recibido por", placeholder="Nombre")
 
         recepcion_base = lineas_pallet_recepcion.copy()
@@ -4594,7 +4622,7 @@ with tab_bases:
         st.caption("Escanea o digita el codigo, informa la locacion en Darkinel, conta las piezas reales y guarda el conteo. Formato recomendado: Rack-Puerta-Estante, por ejemplo 1-1-A. Si el articulo esta en mas de una locacion o subzona, cargalo una vez por cada lugar.")
         codigo_conteo = st.text_input("Codigo contado en Darkinel", placeholder="Ej: PE01-14-302", key="codigo_conteo_darkinel")
         codigo_norm_conteo = normalizar_codigo(codigo_conteo) if codigo_conteo else ""
-        ubicacion_conteo = st.text_input("Locacion Darkinel", placeholder="Ej: 1-1-A", help="Rack-Puerta-Estante. Ejemplo: 1-1-A.", key="ubicacion_conteo_darkinel").strip().upper()
+        ubicacion_conteo = normalizar_locacion(st.text_input("Locacion Darkinel", placeholder="Ej: 1-1-A", help="Rack-Puerta-Estante. Ejemplo: 1-1-A.", key="ubicacion_conteo_darkinel"))
         ubicacion_clave_conteo = ubicacion_conteo or "SIN LOCACION"
         sububicacion_conteo = normalizar_sububicacion_darkinel(
             st.selectbox(
@@ -4667,7 +4695,7 @@ with tab_bases:
                 item for item in st.session_state.get("conteo_darkinel", [])
                 if not (
                     normalizar_codigo(item.get("codigo_normalizado", "")) == codigo_norm_conteo
-                    and str(item.get("ubicacion", "") or "SIN LOCACION").strip().upper() == ubicacion_clave_conteo
+                    and normalizar_locacion(item.get("ubicacion", "") or "SIN LOCACION") == ubicacion_clave_conteo
                     and normalizar_sububicacion_darkinel(item.get("sububicacion", "")) == sububicacion_conteo
                 )
             ]
@@ -4681,11 +4709,11 @@ with tab_bases:
             st.dataframe(limpiar_df_visible(conteos_actuales.sort_values("fecha_hora", ascending=False)), use_container_width=True, hide_index=True)
             st.markdown("**PDF para imprimir por gondola / estante**")
             ubicaciones_pdf = sorted(
-                [
-                    str(x).strip().upper()
+                dict.fromkeys(
+                    normalizar_locacion(x)
                     for x in conteos_actuales["ubicacion"].dropna().unique().tolist()
-                    if str(x).strip()
-                ]
+                    if normalizar_locacion(x)
+                )
             )
             seleccion_pdf = st.selectbox(
                 "Locacion a imprimir",
