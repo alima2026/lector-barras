@@ -1663,7 +1663,7 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
     articulo = str(salida.get("articulo", "")).strip()
     descripcion = str(salida.get("descripcion", "")).strip()
     codigo = str(salida.get("codigo_normalizado", "")).strip()
-    codigo_barra = str(salida.get("codigo_barra") or articulo or codigo).strip()
+    codigo_barra = codigo_barra_nodum(salida.get("codigo_barra") or articulo or codigo)
     ubicacion = str(salida.get("ubicacion", "")).strip()
     cantidad = formatear_numero(salida.get("cantidad", 0))
     observaciones = str(salida.get("observaciones", "")).strip()
@@ -3396,6 +3396,13 @@ def _barcode_articulo_flowable(codigo: str, bar_width: float = 0.30 * mm, bar_he
     barcode = code128.Code128(codigo, barHeight=bar_height, barWidth=bar_width, humanReadable=False)
     barcode.hAlign = "CENTER"
     return barcode
+
+
+def codigo_barra_nodum(codigo: str) -> str:
+    codigo = str(codigo or "").strip().upper()
+    if not codigo:
+        return "SIN-CODIGO"
+    return codigo
 
 
 def codigo_barra_articulo(articulo: str, corregir_guion_teclado: bool = False) -> str:
