@@ -1681,12 +1681,28 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
     title_style = styles["Title"]
     title_style.fontSize = 18
     normal = styles["BodyText"]
-    small = ParagraphStyle("BarcodeSmall", parent=normal, fontSize=8, leading=10)
+    small = ParagraphStyle("BarcodeSmall", parent=normal, fontSize=8, leading=9, alignment=1)
 
-    barcode_cell = [
-        _barcode_articulo_flowable(codigo_barra),
-        Paragraph(_html_escape(codigo_barra), small),
-    ]
+    barcode_cell = Table(
+        [
+            [_barcode_articulo_flowable(codigo_barra, bar_width=0.18 * mm, bar_height=10 * mm)],
+            [Paragraph(_html_escape(codigo_barra), small)],
+        ],
+        colWidths=[46 * mm],
+        rowHeights=[11 * mm, 5 * mm],
+    )
+    barcode_cell.setStyle(
+        TableStyle(
+            [
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 1),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+            ]
+        )
+    )
     story = [
         Paragraph(_html_escape(titulo_remito), title_style),
         Spacer(1, 5 * mm),
@@ -1719,7 +1735,8 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
                     Paragraph(_html_escape(cantidad), normal),
                 ],
             ],
-            colWidths=[28 * mm, 45 * mm, 32 * mm, 52 * mm, 28 * mm, 20 * mm],
+            colWidths=[25 * mm, 48 * mm, 28 * mm, 45 * mm, 22 * mm, 14 * mm],
+            rowHeights=[11 * mm, 24 * mm],
             repeatRows=1,
         ),
         Spacer(1, 28 * mm),
@@ -1736,6 +1753,8 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
                         ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
                         ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
                         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("ALIGN", (1, 1), (1, 1), "CENTER"),
+                        ("ALIGN", (-1, 1), (-1, 1), "CENTER"),
                         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                         ("FONTSIZE", (0, 0), (-1, -1), 8),
                         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
@@ -3373,10 +3392,12 @@ def nombre_archivo_control() -> str:
     return f"control_depositos_darkinel_polo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
 
 
-def _barcode_articulo_flowable(codigo: str):
+def _barcode_articulo_flowable(codigo: str, bar_width: float = 0.30 * mm, bar_height: float = 13 * mm):
     if not codigo:
         codigo = "SIN-CODIGO"
-    return code128.Code128(codigo, barHeight=13 * mm, barWidth=0.30 * mm, humanReadable=False)
+    barcode = code128.Code128(codigo, barHeight=bar_height, barWidth=bar_width, humanReadable=False)
+    barcode.hAlign = "CENTER"
+    return barcode
 
 
 def codigo_barra_articulo(articulo: str, corregir_guion_teclado: bool = False) -> str:
