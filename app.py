@@ -3402,7 +3402,10 @@ def codigo_barra_nodum(codigo: str) -> str:
     codigo = str(codigo or "").strip().upper()
     if not codigo:
         return "SIN-CODIGO"
-    return codigo.replace("'", "-").replace("´", "-").replace("`", "-").replace("’", "-")
+    codigo = codigo.replace("'", "-").replace("´", "-").replace("`", "-").replace("’", "-")
+    # El lector trabaja como teclado. En algunos equipos con teclado ES/LATAM,
+    # codificar "-" termina escribiendo "'"; codificar "/" hace que lea "-".
+    return codigo.replace("-", "/")
 
 
 def codigo_barra_articulo(articulo: str, corregir_guion_teclado: bool = False) -> str:
