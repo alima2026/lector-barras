@@ -1681,15 +1681,15 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
     title_style = styles["Title"]
     title_style.fontSize = 18
     normal = styles["BodyText"]
-    small = ParagraphStyle("BarcodeSmall", parent=normal, fontSize=8, leading=9, alignment=1)
+    normal.fontSize = 8
+    normal.leading = 10
 
     barcode_cell = Table(
         [
-            [_barcode_articulo_flowable(codigo_barra, bar_width=0.18 * mm, bar_height=10 * mm)],
-            [Paragraph(_html_escape(codigo_barra), small)],
+            [_barcode_articulo_flowable(codigo_barra, bar_width=0.18 * mm, bar_height=11 * mm)],
         ],
-        colWidths=[46 * mm],
-        rowHeights=[11 * mm, 5 * mm],
+        colWidths=[45 * mm],
+        rowHeights=[16 * mm],
     )
     barcode_cell.setStyle(
         TableStyle(
@@ -1719,23 +1719,21 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
         Table(
             [
                 [
-                    Paragraph("<b>Codigo</b>", normal),
-                    Paragraph("<b>Codigo de barras</b>", normal),
                     Paragraph("<b>Articulo</b>", normal),
+                    Paragraph("<b>Codigo de barras</b>", normal),
                     Paragraph("<b>Descripcion</b>", normal),
                     Paragraph(f"<b>{_html_escape(locacion_label)}</b>", normal),
                     Paragraph("<b>Cantidad</b>", normal),
                 ],
                 [
-                    Paragraph(_html_escape(codigo), normal),
-                    barcode_cell,
                     Paragraph(_html_escape(articulo), normal),
+                    barcode_cell,
                     Paragraph(_html_escape(descripcion), normal),
                     Paragraph(_html_escape(ubicacion), normal),
                     Paragraph(_html_escape(cantidad), normal),
                 ],
             ],
-            colWidths=[25 * mm, 48 * mm, 28 * mm, 45 * mm, 22 * mm, 14 * mm],
+            colWidths=[42 * mm, 46 * mm, 54 * mm, 24 * mm, 16 * mm],
             rowHeights=[11 * mm, 24 * mm],
             repeatRows=1,
         ),
