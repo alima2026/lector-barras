@@ -3402,7 +3402,7 @@ def codigo_barra_nodum(codigo: str) -> str:
     codigo = str(codigo or "").strip().upper()
     if not codigo:
         return "SIN-CODIGO"
-    return codigo
+    return codigo.replace("'", "-").replace("´", "-").replace("`", "-").replace("’", "-")
 
 
 def codigo_barra_articulo(articulo: str, corregir_guion_teclado: bool = False) -> str:
