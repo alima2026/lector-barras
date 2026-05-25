@@ -1686,10 +1686,10 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
 
     barcode_cell = Table(
         [
-            [_barcode_articulo_flowable(codigo_barra, bar_width=0.18 * mm, bar_height=11 * mm)],
+            [_barcode_articulo_flowable(codigo_barra, bar_width=0.24 * mm, bar_height=16 * mm)],
         ],
-        colWidths=[45 * mm],
-        rowHeights=[16 * mm],
+        colWidths=[57 * mm],
+        rowHeights=[22 * mm],
     )
     barcode_cell.setStyle(
         TableStyle(
@@ -1733,8 +1733,8 @@ def generar_remito_salida_pdf(salida: dict) -> bytes:
                     Paragraph(_html_escape(cantidad), normal),
                 ],
             ],
-            colWidths=[42 * mm, 46 * mm, 54 * mm, 24 * mm, 16 * mm],
-            rowHeights=[11 * mm, 24 * mm],
+            colWidths=[40 * mm, 58 * mm, 42 * mm, 24 * mm, 18 * mm],
+            rowHeights=[11 * mm, 30 * mm],
             repeatRows=1,
         ),
         Spacer(1, 28 * mm),
