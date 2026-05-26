@@ -1798,25 +1798,50 @@ def dibujo_estante_darkinel(loc_df: pd.DataFrame):
         dibujo.add(String(5 * mm, margen_inf + est_alto - 6 * mm, f"ESTRELLA / TODO EL ESTANTE: {piezas('ESTRELLA')}", fontSize=7, fillColor=colors.black))
         return dibujo
 
-    dibujo.add(Line(ancho / 2, margen_inf, ancho / 2, margen_inf + est_alto, strokeColor=colors.black, strokeWidth=1.2))
-    dibujo.add(Line(0, margen_inf + est_alto / 2, ancho, margen_inf + est_alto / 2, strokeColor=colors.black, strokeWidth=1.2))
+    zonas_usadas = [
+        zona for zona in ["CUADRADO", "CIRCULO", "X", "TRIANGULO"]
+        if float(conteos.get(zona, 0) or 0) > 0
+    ]
+    if not zonas_usadas:
+        zonas_usadas = ["SIN SUBDIVISION"]
 
-    dibujo.add(String(3 * mm, margen_inf + est_alto - 6 * mm, f"CUADRADO: {piezas('CUADRADO')}", fontSize=6.5, fillColor=colors.black))
-    dibujo.add(Rect(13 * mm, margen_inf + est_alto * 0.64, 14 * mm, 10 * mm, strokeColor=verde, strokeWidth=2.0, fillColor=None))
+    def dibujar_simbolo(zona: str, x: float, y: float, w: float, h: float) -> None:
+        cx, cy = x + w / 2, y + h / 2 - 1 * mm
+        dibujo.add(String(x + 3 * mm, y + h - 6 * mm, f"{zona}: {piezas(zona)}", fontSize=6.5, fillColor=colors.black))
+        if zona == "CUADRADO":
+            dibujo.add(Rect(cx - 8 * mm, cy - 5 * mm, 16 * mm, 10 * mm, strokeColor=verde, strokeWidth=2.0, fillColor=None))
+        elif zona == "CIRCULO":
+            dibujo.add(Circle(cx, cy, 6 * mm, strokeColor=verde, strokeWidth=2.0, fillColor=None))
+        elif zona == "TRIANGULO":
+            dibujo.add(Polygon([cx, cy + 9 * mm, cx - 7 * mm, cy - 5 * mm, cx + 7 * mm, cy - 5 * mm], strokeColor=verde, strokeWidth=2.0, fillColor=None))
+        elif zona == "X":
+            dibujo.add(Line(cx - 6 * mm, cy - 6 * mm, cx + 6 * mm, cy + 6 * mm, strokeColor=verde, strokeWidth=1.8))
+            dibujo.add(Line(cx - 6 * mm, cy + 6 * mm, cx + 6 * mm, cy - 6 * mm, strokeColor=verde, strokeWidth=1.8))
+        else:
+            dibujo.add(String(cx - 10 * mm, cy, "SIN ZONA", fontSize=7, fillColor=colors.grey))
 
-    dibujo.add(String(ancho / 2 + 3 * mm, margen_inf + est_alto - 6 * mm, f"CIRCULO: {piezas('CIRCULO')}", fontSize=6.5, fillColor=colors.black))
-    dibujo.add(Circle(ancho * 0.74, margen_inf + est_alto * 0.72, 5.5 * mm, strokeColor=verde, strokeWidth=2.0, fillColor=None))
+    if len(zonas_usadas) == 1:
+        dibujar_simbolo(zonas_usadas[0], 0, margen_inf, ancho, est_alto)
+    elif len(zonas_usadas) <= 3:
+        celda_ancho = ancho / len(zonas_usadas)
+        for idx, zona in enumerate(zonas_usadas):
+            x = idx * celda_ancho
+            if idx > 0:
+                dibujo.add(Line(x, margen_inf, x, margen_inf + est_alto, strokeColor=colors.black, strokeWidth=1.2))
+            dibujar_simbolo(zona, x, margen_inf, celda_ancho, est_alto)
+    else:
+        dibujo.add(Line(ancho / 2, margen_inf, ancho / 2, margen_inf + est_alto, strokeColor=colors.black, strokeWidth=1.2))
+        dibujo.add(Line(0, margen_inf + est_alto / 2, ancho, margen_inf + est_alto / 2, strokeColor=colors.black, strokeWidth=1.2))
+        posiciones = {
+            "CUADRADO": (0, margen_inf + est_alto / 2, ancho / 2, est_alto / 2),
+            "CIRCULO": (ancho / 2, margen_inf + est_alto / 2, ancho / 2, est_alto / 2),
+            "X": (0, margen_inf, ancho / 2, est_alto / 2),
+            "TRIANGULO": (ancho / 2, margen_inf, ancho / 2, est_alto / 2),
+        }
+        for zona in zonas_usadas:
+            dibujar_simbolo(zona, *posiciones[zona])
 
-    dibujo.add(String(3 * mm, margen_inf + est_alto * 0.37, f"X: {piezas('X')}", fontSize=6.5, fillColor=colors.black))
-    x1, y1 = 18 * mm, margen_inf + est_alto * 0.22
-    dibujo.add(Line(x1 - 5.5 * mm, y1 - 5 * mm, x1 + 5.5 * mm, y1 + 5 * mm, strokeColor=verde, strokeWidth=1.7))
-    dibujo.add(Line(x1 - 5.5 * mm, y1 + 5 * mm, x1 + 5.5 * mm, y1 - 5 * mm, strokeColor=verde, strokeWidth=1.7))
-
-    dibujo.add(String(ancho / 2 + 3 * mm, margen_inf + est_alto * 0.37, f"TRIANGULO: {piezas('TRIANGULO')}", fontSize=6.5, fillColor=colors.black))
-    tx, ty = ancho * 0.74, margen_inf + est_alto * 0.20
-    dibujo.add(Polygon([tx, ty + 10 * mm, tx - 7 * mm, ty - 3 * mm, tx + 7 * mm, ty - 3 * mm], strokeColor=verde, strokeWidth=2.0, fillColor=None))
-
-    dibujo.add(String(0, 2 * mm, f"ESTRELLA / TODO EL ESTANTE: {piezas('ESTRELLA')}", fontSize=7, fillColor=colors.black))
+    dibujo.add(String(0, 2 * mm, f"ZONAS USADAS: {' / '.join(zonas_usadas)}", fontSize=7, fillColor=colors.black))
     return dibujo
 
 
@@ -4939,70 +4964,102 @@ with tab_bases:
 
         if not conteos_actuales.empty:
             st.markdown("**Ultimos conteos guardados**")
-            st.dataframe(limpiar_df_visible(conteos_actuales.sort_values("fecha_hora", ascending=False)), use_container_width=True, hide_index=True)
-            with st.expander("Corregir o borrar un conteo guardado", expanded=False):
-                conteos_edicion = conteos_actuales.sort_values("fecha_hora", ascending=False).reset_index(drop=True)
-                opciones_conteo = [
-                    (
-                        f"{idx + 1}) {r.codigo_normalizado} | {r.articulo} | "
-                        f"{ubicacion_darkinel_detalle(r.ubicacion, r.sububicacion)} | "
-                        f"{formatear_numero(r.cantidad_contada)} pieza(s) | {r.fecha_hora}"
-                    )
-                    for idx, r in enumerate(conteos_edicion.itertuples())
+            conteos_ordenados = conteos_actuales.sort_values("fecha_hora", ascending=False).reset_index(drop=True)
+            st.caption("Mostrando los ultimos 100 conteos para que la pantalla cargue mas rapido.")
+            st.dataframe(limpiar_df_visible(conteos_ordenados.head(100)), use_container_width=True, hide_index=True)
+            with st.expander("Corregir o borrar conteos en la tabla", expanded=False):
+                st.caption("Edita la linea directamente. Para eliminar una linea, marca Borrar y guarda los cambios.")
+                limite_edicion = st.number_input(
+                    "Lineas recientes a editar",
+                    min_value=20,
+                    max_value=500,
+                    value=100,
+                    step=20,
+                    key="limite_edicion_conteos_darkinel",
+                )
+                limite_edicion = int(limite_edicion)
+                conteos_edicion = conteos_ordenados.head(limite_edicion).copy()
+                conteos_restantes = conteos_ordenados.iloc[limite_edicion:].copy()
+                conteos_edicion["borrar"] = False
+                columnas_edicion = [
+                    "borrar",
+                    "codigo_normalizado",
+                    "articulo",
+                    "descripcion",
+                    "ubicacion",
+                    "sububicacion",
+                    "cantidad_contada",
+                    "contado_por",
+                    "fecha_hora",
+                    "observaciones",
                 ]
-                seleccion_conteo = st.selectbox("Linea a corregir o borrar", opciones_conteo, key="editar_conteo_darkinel_select")
-                conteo_sel = conteos_edicion.iloc[opciones_conteo.index(seleccion_conteo)].to_dict()
-                with st.form("form_editar_conteo_darkinel"):
-                    e1, e2 = st.columns([1, 1])
-                    nuevo_codigo = e1.text_input("Codigo normalizado", value=str(conteo_sel.get("codigo_normalizado", "")), key="editar_conteo_codigo")
-                    nuevo_articulo = e2.text_input("Articulo", value=str(conteo_sel.get("articulo", "")), key="editar_conteo_articulo")
-                    nueva_descripcion = st.text_input("Descripcion", value=str(conteo_sel.get("descripcion", "")), key="editar_conteo_descripcion")
-                    e3, e4, e5 = st.columns([1, 1, 1])
-                    nueva_ubicacion = e3.text_input("Locacion Darkinel", value=str(conteo_sel.get("ubicacion", "")), key="editar_conteo_ubicacion")
-                    sub_actual = normalizar_sububicacion_darkinel(conteo_sel.get("sububicacion", ""), default="ESTRELLA")
-                    sub_index = SUBUBICACIONES_DARKINEL.index(sub_actual) if sub_actual in SUBUBICACIONES_DARKINEL else 0
-                    nueva_sububicacion = e4.selectbox("Zona dentro del estante", SUBUBICACIONES_DARKINEL, index=sub_index, key="editar_conteo_sububicacion")
-                    nueva_cantidad = e5.number_input("Piezas contadas", min_value=0.0, value=float(conteo_sel.get("cantidad_contada", 0) or 0), step=1.0, key="editar_conteo_cantidad")
-                    e6, e7 = st.columns([1, 2])
-                    nuevo_contado_por = e6.text_input("Contado por", value=str(conteo_sel.get("contado_por", "")), key="editar_conteo_contado_por")
-                    nuevas_observaciones = e7.text_input("Observaciones", value=str(conteo_sel.get("observaciones", "")), key="editar_conteo_observaciones")
-                    guardar_edicion = st.form_submit_button("Guardar correccion", type="primary")
-                    borrar_conteo = st.form_submit_button("Borrar este conteo")
-
-                def coincide_conteo_guardado(item: dict) -> bool:
-                    return (
-                        normalizar_codigo(item.get("codigo_normalizado", "")) == normalizar_codigo(conteo_sel.get("codigo_normalizado", ""))
-                        and normalizar_locacion(item.get("ubicacion", "") or "SIN LOCACION") == normalizar_locacion(conteo_sel.get("ubicacion", "") or "SIN LOCACION")
-                        and normalizar_sububicacion_darkinel(item.get("sububicacion", "")) == normalizar_sububicacion_darkinel(conteo_sel.get("sububicacion", ""))
-                    )
-
-                if guardar_edicion or borrar_conteo:
-                    st.session_state.conteo_darkinel = [
-                        item for item in st.session_state.get("conteo_darkinel", [])
-                        if not coincide_conteo_guardado(item)
-                    ]
-                    if guardar_edicion:
-                        codigo_editado = normalizar_codigo(nuevo_codigo)
+                conteos_editados = st.data_editor(
+                    conteos_edicion[columnas_edicion],
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="fixed",
+                    disabled=["fecha_hora"],
+                    key="editor_conteos_darkinel",
+                    column_config={
+                        "borrar": st.column_config.CheckboxColumn("Borrar"),
+                        "codigo_normalizado": st.column_config.TextColumn("Codigo normalizado"),
+                        "articulo": st.column_config.TextColumn("Articulo"),
+                        "descripcion": st.column_config.TextColumn("Descripcion"),
+                        "ubicacion": st.column_config.TextColumn("Locacion Darkinel"),
+                        "sububicacion": st.column_config.SelectboxColumn(
+                            "Zona dentro del estante",
+                            options=SUBUBICACIONES_DARKINEL,
+                        ),
+                        "cantidad_contada": st.column_config.NumberColumn(
+                            "Piezas contadas",
+                            min_value=0.0,
+                            step=1.0,
+                        ),
+                        "contado_por": st.column_config.TextColumn("Contado por"),
+                        "fecha_hora": st.column_config.TextColumn("Fecha/Hora"),
+                        "observaciones": st.column_config.TextColumn("Observaciones"),
+                    },
+                )
+                guardar_cambios_conteos = st.button(
+                    "Guardar cambios de conteos",
+                    type="primary",
+                    key="guardar_cambios_conteos_darkinel",
+                )
+                if guardar_cambios_conteos:
+                    editados_validos = conteos_editados.copy()
+                    editados_validos = editados_validos[~editados_validos["borrar"].fillna(False).astype(bool)].copy()
+                    editados_validos = editados_validos.drop(columns=["borrar"], errors="ignore")
+                    reconstruido = pd.concat([editados_validos, conteos_restantes], ignore_index=True, sort=False)
+                    nuevos_conteos = []
+                    for _, fila_conteo in reconstruido.iterrows():
+                        codigo_editado = normalizar_codigo(
+                            fila_conteo.get("codigo_normalizado", "")
+                            or fila_conteo.get("articulo", "")
+                        )
                         if not codigo_editado:
-                            st.error("El codigo no puede quedar vacio.")
-                            st.stop()
-                        st.session_state.conteo_darkinel.append(
+                            continue
+                        cantidad_editada = pd.to_numeric(fila_conteo.get("cantidad_contada", 0), errors="coerce")
+                        if pd.isna(cantidad_editada):
+                            cantidad_editada = 0.0
+                        nuevos_conteos.append(
                             {
                                 "codigo_normalizado": codigo_editado,
-                                "articulo": str(nuevo_articulo).strip().upper() or codigo_editado,
-                                "descripcion": str(nueva_descripcion).strip(),
-                                "ubicacion": normalizar_locacion(nueva_ubicacion) or "SIN LOCACION",
-                                "sububicacion": normalizar_sububicacion_darkinel(nueva_sububicacion, default="ESTRELLA"),
-                                "cantidad_contada": float(nueva_cantidad),
-                                "contado_por": str(nuevo_contado_por).strip(),
-                                "fecha_hora": ahora_texto(),
-                                "observaciones": str(nuevas_observaciones).strip(),
+                                "articulo": str(fila_conteo.get("articulo", "")).strip().upper() or codigo_editado,
+                                "descripcion": str(fila_conteo.get("descripcion", "")).strip(),
+                                "ubicacion": normalizar_locacion(fila_conteo.get("ubicacion", "")) or "SIN LOCACION",
+                                "sububicacion": normalizar_sububicacion_darkinel(
+                                    fila_conteo.get("sububicacion", ""),
+                                    default="ESTRELLA",
+                                ),
+                                "cantidad_contada": float(cantidad_editada),
+                                "contado_por": str(fila_conteo.get("contado_por", "")).strip(),
+                                "fecha_hora": str(fila_conteo.get("fecha_hora", "")).strip() or ahora_texto(),
+                                "observaciones": str(fila_conteo.get("observaciones", "")).strip(),
                             }
                         )
-                        st.success("Conteo corregido.")
-                    else:
-                        st.success("Conteo borrado.")
+                    st.session_state.conteo_darkinel = nuevos_conteos
                     guardar_conteo_darkinel_db()
+                    st.success("Conteos actualizados.")
                     st.rerun()
 
             st.markdown("**PDF para imprimir por gondola / estante**")
