@@ -370,13 +370,59 @@ def guardar_mudanza_actual_db(fusionar_con_nube: bool = True) -> None:
     )
 
 
+def firma_salida(item: dict) -> str:
+    remito = str(item.get("remito_num", "")).strip()
+    if remito:
+        return f"remito:{remito}"
+    campos = [
+        "salida_id", "fecha_hora", "codigo_normalizado", "articulo",
+        "ubicacion", "cantidad", "solicitado_por", "responsable",
+    ]
+    base = "|".join(str(item.get(c, "")).strip() for c in campos)
+    return hashlib.sha1(base.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def fusionar_salidas(items_nube: list, items_locales: list) -> list:
+    fusionados = []
+    vistos = set()
+    for origen in (items_nube or [], items_locales or []):
+        for item in origen:
+            if not isinstance(item, dict):
+                continue
+            clave = firma_salida(item)
+            if clave in vistos:
+                for i, existente in enumerate(fusionados):
+                    if firma_salida(existente) == clave:
+                        fusionados[i] = {**existente, **item}
+                        break
+            else:
+                vistos.add(clave)
+                fusionados.append(item)
+    return fusionados
+
+
 def guardar_salidas_polo_db() -> None:
+    estado_guardado = cargar_salidas_polo_db()
+    salidas = fusionar_salidas(estado_guardado.get("salidas", []), st.session_state.get("salidas_polo", []))
+    salida_seq = max(
+        int(st.session_state.get("salida_seq", 0) or 0),
+        int(estado_guardado.get("salida_seq", 0) or 0),
+        max([int(x.get("salida_id", 0) or 0) for x in salidas if isinstance(x, dict)] or [0]),
+    )
+    remito_seq = max(
+        int(st.session_state.get("remito_seq", 0) or 0),
+        int(estado_guardado.get("remito_seq", 0) or 0),
+        salida_seq,
+    )
+    st.session_state.salidas_polo = salidas
+    st.session_state.salida_seq = salida_seq
+    st.session_state.remito_seq = remito_seq
     guardar_estado_db(
         "salidas_polo",
         {
-            "salidas": st.session_state.get("salidas_polo", []),
-            "salida_seq": st.session_state.get("salida_seq", 0),
-            "remito_seq": st.session_state.get("remito_seq", 0),
+            "salidas": salidas,
+            "salida_seq": salida_seq,
+            "remito_seq": remito_seq,
         },
     )
 
@@ -392,12 +438,27 @@ def cargar_salidas_polo_db() -> Dict[str, object]:
 
 
 def guardar_salidas_darkinel_db() -> None:
+    estado_guardado = cargar_salidas_darkinel_db()
+    salidas = fusionar_salidas(estado_guardado.get("salidas", []), st.session_state.get("salidas_darkinel", []))
+    salida_seq = max(
+        int(st.session_state.get("salida_darkinel_seq", 0) or 0),
+        int(estado_guardado.get("salida_darkinel_seq", 0) or 0),
+        max([int(x.get("salida_id", 0) or 0) for x in salidas if isinstance(x, dict)] or [0]),
+    )
+    remito_seq = max(
+        int(st.session_state.get("remito_darkinel_seq", 0) or 0),
+        int(estado_guardado.get("remito_darkinel_seq", 0) or 0),
+        salida_seq,
+    )
+    st.session_state.salidas_darkinel = salidas
+    st.session_state.salida_darkinel_seq = salida_seq
+    st.session_state.remito_darkinel_seq = remito_seq
     guardar_estado_db(
         "salidas_darkinel",
         {
-            "salidas": st.session_state.get("salidas_darkinel", []),
-            "salida_darkinel_seq": st.session_state.get("salida_darkinel_seq", 0),
-            "remito_darkinel_seq": st.session_state.get("remito_darkinel_seq", 0),
+            "salidas": salidas,
+            "salida_darkinel_seq": salida_seq,
+            "remito_darkinel_seq": remito_seq,
         },
     )
 
@@ -4894,6 +4955,16 @@ with tab_salidas:
                         use_container_width=True,
                         hide_index=True,
                     )
+                    estado_salidas_actual = cargar_salidas_polo_db()
+                    st.session_state.remito_seq = max(
+                        int(st.session_state.get("remito_seq", 0) or 0),
+                        int(estado_salidas_actual.get("remito_seq", 0) or 0),
+                        int(estado_salidas_actual.get("salida_seq", 0) or 0),
+                    )
+                    st.session_state.salida_seq = max(
+                        int(st.session_state.get("salida_seq", 0) or 0),
+                        int(estado_salidas_actual.get("salida_seq", 0) or 0),
+                    )
                     proximo_remito = f"R{int(st.session_state.get('remito_seq', 0) or 0) + 1:06d}"
                     st.caption(f"Proximo remito: {proximo_remito}")
                     with st.form("form_salida_polo"):
@@ -4910,6 +4981,21 @@ with tab_salidas:
                         if not solicitado_por:
                             st.error("Informa quien solicita desde Darkinel antes de generar el remito.")
                             st.stop()
+                        estado_salidas_actual = cargar_salidas_polo_db()
+                        st.session_state.salidas_polo = fusionar_salidas(
+                            estado_salidas_actual.get("salidas", []),
+                            st.session_state.get("salidas_polo", []),
+                        )
+                        st.session_state.salida_seq = max(
+                            int(st.session_state.get("salida_seq", 0) or 0),
+                            int(estado_salidas_actual.get("salida_seq", 0) or 0),
+                            max([int(x.get("salida_id", 0) or 0) for x in st.session_state.salidas_polo if isinstance(x, dict)] or [0]),
+                        )
+                        st.session_state.remito_seq = max(
+                            int(st.session_state.get("remito_seq", 0) or 0),
+                            int(estado_salidas_actual.get("remito_seq", 0) or 0),
+                            st.session_state.salida_seq,
+                        )
                         st.session_state.salida_seq = int(st.session_state.get("salida_seq", 0) or 0) + 1
                         st.session_state.remito_seq = int(st.session_state.get("remito_seq", 0) or 0) + 1
                         remito_num = f"R{st.session_state.remito_seq:06d}"
@@ -5248,6 +5334,16 @@ with tab_bases:
                     hide_index=True,
                 )
 
+                estado_salidas_darkinel_actual = cargar_salidas_darkinel_db()
+                st.session_state.remito_darkinel_seq = max(
+                    int(st.session_state.get("remito_darkinel_seq", 0) or 0),
+                    int(estado_salidas_darkinel_actual.get("remito_darkinel_seq", 0) or 0),
+                    int(estado_salidas_darkinel_actual.get("salida_darkinel_seq", 0) or 0),
+                )
+                st.session_state.salida_darkinel_seq = max(
+                    int(st.session_state.get("salida_darkinel_seq", 0) or 0),
+                    int(estado_salidas_darkinel_actual.get("salida_darkinel_seq", 0) or 0),
+                )
                 proximo_remito_darkinel = f"RD{int(st.session_state.get('remito_darkinel_seq', 0) or 0) + 1:06d}"
                 st.caption(f"Proximo remito Darkinel: {proximo_remito_darkinel}")
                 with st.form("form_salida_darkinel"):
@@ -5275,6 +5371,21 @@ with tab_bases:
                     if float(cantidad_salida_darkinel) > disponible_darkinel:
                         st.error("La cantidad a descontar no puede ser mayor al disponible en esa locacion.")
                         st.stop()
+                    estado_salidas_darkinel_actual = cargar_salidas_darkinel_db()
+                    st.session_state.salidas_darkinel = fusionar_salidas(
+                        estado_salidas_darkinel_actual.get("salidas", []),
+                        st.session_state.get("salidas_darkinel", []),
+                    )
+                    st.session_state.salida_darkinel_seq = max(
+                        int(st.session_state.get("salida_darkinel_seq", 0) or 0),
+                        int(estado_salidas_darkinel_actual.get("salida_darkinel_seq", 0) or 0),
+                        max([int(x.get("salida_id", 0) or 0) for x in st.session_state.salidas_darkinel if isinstance(x, dict)] or [0]),
+                    )
+                    st.session_state.remito_darkinel_seq = max(
+                        int(st.session_state.get("remito_darkinel_seq", 0) or 0),
+                        int(estado_salidas_darkinel_actual.get("remito_darkinel_seq", 0) or 0),
+                        st.session_state.salida_darkinel_seq,
+                    )
                     st.session_state.salida_darkinel_seq = int(st.session_state.get("salida_darkinel_seq", 0) or 0) + 1
                     st.session_state.remito_darkinel_seq = int(st.session_state.get("remito_darkinel_seq", 0) or 0) + 1
                     remito_darkinel = f"RD{st.session_state.remito_darkinel_seq:06d}"
