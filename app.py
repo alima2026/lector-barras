@@ -4238,11 +4238,40 @@ stock_polo_metric_visible = limpiar_df_visible(stock_polo_metric)
 piezas_darkinel_metric = int(pd.to_numeric(stock_darkinel_metric_visible.get("Stock restante Darkinel", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
 piezas_polo_metric = int(pd.to_numeric(stock_polo_metric_visible.get("Stock total Polo", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
 piezas_nodum_metric = int(pd.to_numeric(stock_consolidado.get("cantidad", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not stock_consolidado.empty else 0
+piezas_fisicas_metric = piezas_darkinel_metric + piezas_polo_metric
+piezas_diferencia_metric = piezas_fisicas_metric - piezas_nodum_metric
 piezas_mudanza_metric = int(pd.to_numeric(df_operativo.get("cantidad_mudada", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
-sku_nodum_metric = int((pd.to_numeric(stock_consolidado.get("cantidad", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if not stock_consolidado.empty else 0
-sku_polo_metric = int((pd.to_numeric(stock_polo_metric_visible.get("Stock total Polo", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if not stock_polo_metric_visible.empty else 0
-sku_darkinel_metric = int((pd.to_numeric(stock_darkinel_metric_visible.get("Stock restante Darkinel", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if not stock_darkinel_metric_visible.empty else 0
-sku_anexado_metric = int(stock_darkinel_metric_visible.get("Estado", pd.Series(dtype=str)).fillna("").astype(str).str.upper().eq("ANEXADO").sum()) if not stock_darkinel_metric_visible.empty else 0
+sku_nodum_set = set()
+if not stock_consolidado.empty and "codigo_normalizado" in stock_consolidado.columns:
+    stock_tmp = stock_consolidado.copy()
+    stock_tmp["_cantidad_metric"] = pd.to_numeric(stock_tmp.get("cantidad", 0), errors="coerce").fillna(0)
+    sku_nodum_set = set(stock_tmp.loc[stock_tmp["_cantidad_metric"] > 0, "codigo_normalizado"].map(normalizar_codigo))
+    sku_nodum_set.discard("")
+sku_polo_set = set()
+if not stock_polo_metric_visible.empty:
+    col_codigo_polo = extraer_columna(stock_polo_metric_visible, ["Codigo normalizado", "Codigo"])
+    if col_codigo_polo:
+        polo_tmp = stock_polo_metric_visible.copy()
+        polo_tmp["_cantidad_metric"] = pd.to_numeric(polo_tmp.get("Stock total Polo", 0), errors="coerce").fillna(0)
+        sku_polo_set = set(polo_tmp.loc[polo_tmp["_cantidad_metric"] > 0, col_codigo_polo].map(normalizar_codigo))
+        sku_polo_set.discard("")
+sku_darkinel_set = set()
+if not stock_darkinel_metric_visible.empty:
+    col_codigo_dark = extraer_columna(stock_darkinel_metric_visible, ["Codigo normalizado", "Codigo"])
+    if col_codigo_dark:
+        dark_tmp = stock_darkinel_metric_visible.copy()
+        dark_tmp["_cantidad_metric"] = pd.to_numeric(dark_tmp.get("Stock restante Darkinel", 0), errors="coerce").fillna(0)
+        sku_darkinel_set = set(dark_tmp.loc[dark_tmp["_cantidad_metric"] > 0, col_codigo_dark].map(normalizar_codigo))
+        sku_darkinel_set.discard("")
+sku_nodum_metric = len(sku_nodum_set)
+sku_polo_metric = len(sku_polo_set)
+sku_darkinel_metric = len(sku_darkinel_set)
+sku_fisico_metric = len(sku_polo_set | sku_darkinel_set)
+sku_en_ambos_metric = len(sku_polo_set & sku_darkinel_set)
+sku_solo_polo_metric = len(sku_polo_set - sku_darkinel_set)
+sku_solo_darkinel_metric = len(sku_darkinel_set - sku_polo_set)
+sku_diferencia_metric = sku_fisico_metric - sku_nodum_metric
+sku_anexado_metric = len((sku_polo_set | sku_darkinel_set) - sku_nodum_set)
 
 if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not df_reimpresion.empty:
     st.info(f"El control anterior cargado trae {len(df_reimpresion)} lineas de mudanza.")
@@ -4265,15 +4294,34 @@ if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not
 
 sku_col1, sku_col2, sku_col3, sku_col4 = st.columns(4)
 sku_col1.metric("SKU total Nodum", f"{sku_nodum_metric:,}".replace(",", "."))
-sku_col2.metric("SKU en Polo Logistico", f"{sku_polo_metric:,}".replace(",", "."))
-sku_col3.metric("SKU restante en Darkinel", f"{sku_darkinel_metric:,}".replace(",", "."))
-sku_col4.metric("SKU anexados fuera de Nodum", f"{sku_anexado_metric:,}".replace(",", "."))
+sku_col2.metric("SKU fisico unico", f"{sku_fisico_metric:,}".replace(",", "."), delta=f"{sku_diferencia_metric:+,}".replace(",", "."))
+sku_col3.metric("SKU en Polo Logistico", f"{sku_polo_metric:,}".replace(",", "."))
+sku_col4.metric("SKU restante en Darkinel", f"{sku_darkinel_metric:,}".replace(",", "."))
+st.caption(
+    f"Control SKU: {sku_en_ambos_metric:,}".replace(",", ".")
+    + " codigos estan en Polo y tambien quedan en Darkinel; por eso Polo + Darkinel no se suma directo. "
+    + f"Solo Polo: {sku_solo_polo_metric:,}".replace(",", ".")
+    + f" | Solo Darkinel: {sku_solo_darkinel_metric:,}".replace(",", ".")
+    + f" | Anexados fuera de Nodum: {sku_anexado_metric:,}".replace(",", ".")
+)
 
 pza_col1, pza_col2, pza_col3, pza_col4 = st.columns(4)
 pza_col1.metric("Piezas total Nodum", f"{piezas_nodum_metric:,}".replace(",", "."))
 pza_col2.metric("Piezas restante en Darkinel", f"{piezas_darkinel_metric:,}".replace(",", "."))
 pza_col3.metric("Piezas en Polo Logistico", f"{piezas_polo_metric:,}".replace(",", "."))
 pza_col4.metric("Piezas en mudanza", f"{piezas_mudanza_metric:,}".replace(",", "."))
+if piezas_diferencia_metric:
+    st.warning(
+        "Control de piezas: Darkinel + Polo Logistico = "
+        + f"{piezas_fisicas_metric:,}".replace(",", ".")
+        + " contra Nodum = "
+        + f"{piezas_nodum_metric:,}".replace(",", ".")
+        + ". Diferencia: "
+        + f"{piezas_diferencia_metric:+,}".replace(",", ".")
+        + ". Revisar anexados fuera de Nodum, conteos o salidas pendientes de registrar."
+    )
+else:
+    st.success("Control de piezas OK: Darkinel + Polo Logistico coincide con Nodum.")
 
 st.markdown("---")
 
