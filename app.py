@@ -442,6 +442,37 @@ def cargar_mudanza_actual_db() -> Dict[str, object]:
     return estado
 
 
+def cargar_backups_mudanza() -> List[dict]:
+    backups = cargar_estado_db("mudanza_backups", [])
+    if not isinstance(backups, list):
+        return []
+    return [b for b in backups if isinstance(b, dict)]
+
+
+def guardar_backup_mudanza(motivo: str, estado: Dict[str, object] | None = None) -> None:
+    estado = estado or cargar_mudanza_actual_db()
+    items = estado.get("pick_items", []) if isinstance(estado, dict) else []
+    if not items:
+        return
+    backups = cargar_backups_mudanza()
+    backups.append(
+        {
+            "fecha_hora": ahora_texto(),
+            "motivo": motivo,
+            "lineas": len(items),
+            "piezas": float(
+                sum(numero_seguro(item.get("cantidad_mudada", 0), 0) for item in items if isinstance(item, dict))
+            ),
+            "estado": {
+                "pick_items": items,
+                "pick_seq": int(estado.get("pick_seq", 0) or 0),
+                "pallet_seq": int(estado.get("pallet_seq", max_pallet_items(items)) or 0),
+            },
+        }
+    )
+    guardar_estado_db("mudanza_backups", backups[-30:])
+
+
 def guardar_archivo_estado(clave: str, nombre: str, contenido: bytes) -> None:
     guardar_estado_db(
         clave,
@@ -3743,6 +3774,7 @@ def generar_pdf_pallet_bultos(df_pick: pd.DataFrame, pallet: int, modo: str = "p
 
 
 def limpiar_mudanza_actual() -> None:
+    guardar_backup_mudanza("antes de vaciar mudanza")
     st.session_state.pick_items = []
     st.session_state.pick_seq = 0
     st.session_state.pallet_seq = 0
@@ -3832,10 +3864,14 @@ with st.sidebar:
     polo_guardado_sidebar = cargar_archivo_estado("control_polo_actual")
     usar_polo_guardado = False
     if polo_guardado_sidebar:
-        usar_polo_guardado = st.checkbox(
-            f"Usar control Polo guardado ({polo_guardado_sidebar.get('nombre', 'archivo')})",
-            value=uploaded_polo is None,
-        )
+        if uploaded_polo is None:
+            usar_polo_guardado = True
+            st.success(f"Usando control Polo guardado: {polo_guardado_sidebar.get('nombre', 'archivo')}")
+        else:
+            usar_polo_guardado = st.checkbox(
+                f"Usar control Polo guardado ({polo_guardado_sidebar.get('nombre', 'archivo')}) si el archivo nuevo no se lee",
+                value=True,
+            )
         st.caption(f"Control Polo guardado: {fecha_estado_db('control_polo_actual')}")
         if uploaded_polo is not None and st.button("Guardar este control Polo ahora"):
             guardar_archivo_estado("control_polo_actual", uploaded_polo.name, uploaded_polo.getvalue())
@@ -3875,6 +3911,35 @@ with st.sidebar:
                 st.session_state.admin_habilitado = False
                 st.rerun()
             st.warning("Acciones delicadas")
+            backups_mudanza = cargar_backups_mudanza()
+            if backups_mudanza:
+                backups_recientes = list(reversed(backups_mudanza))
+                opciones_backup = [
+                    (
+                        f"{idx + 1}) {b.get('fecha_hora', '')} | "
+                        f"{b.get('lineas', 0)} lineas | "
+                        f"{formatear_numero(b.get('piezas', 0))} piezas | "
+                        f"{b.get('motivo', '')}"
+                    )
+                    for idx, b in enumerate(backups_recientes)
+                ]
+                backup_sel = st.selectbox(
+                    "Restaurar backup de mudanza",
+                    opciones_backup,
+                    key="restaurar_backup_mudanza_select",
+                )
+                if st.button("Restaurar backup seleccionado", key="restaurar_backup_mudanza_btn"):
+                    backup = backups_recientes[opciones_backup.index(backup_sel)]
+                    estado_backup = backup.get("estado", {})
+                    st.session_state.pick_items = quitar_placeholders_con_detalle(estado_backup.get("pick_items", []))
+                    st.session_state.pick_seq = int(estado_backup.get("pick_seq", 0) or 0)
+                    st.session_state.pallet_seq = max(
+                        int(estado_backup.get("pallet_seq", 0) or 0),
+                        max_pallet_items(st.session_state.pick_items),
+                    )
+                    guardar_mudanza_actual_db(fusionar_con_nube=False)
+                    st.success("Backup de mudanza restaurado.")
+                    st.rerun()
             if st.button("Vaciar mudanza actual", type="secondary", key="vaciar_mudanza_admin"):
                 limpiar_mudanza_actual()
                 st.success("Mudanza actual vaciada.")
@@ -3957,8 +4022,19 @@ polo_guardado = cargar_archivo_estado("control_polo_actual")
 if uploaded_polo is not None:
     polo_bytes = uploaded_polo.getvalue()
     polo_filename = uploaded_polo.name
-    guardar_archivo_si_cambio("control_polo_actual", polo_filename, polo_bytes)
+    st.info(
+        f"Control Polo cargado solo para esta sesion: {polo_filename}. "
+        "No se guarda ni reemplaza la mudanza hasta que uses un boton de guardar/reemplazar."
+    )
     stock_polo_anterior, ubicaciones_anteriores, historial_anterior, detalle_mudanza_anterior = leer_base_polo_anterior(polo_bytes, polo_filename)
+    if detalle_mudanza_anterior.empty and polo_guardado and usar_polo_guardado:
+        st.warning(
+            "El control Polo cargado no trajo lineas de mudanza legibles. "
+            "Uso el control Polo guardado anteriormente para no perder el avance."
+        )
+        polo_bytes = polo_guardado["contenido"]
+        polo_filename = polo_guardado.get("nombre", "control_polo_guardado.xlsx")
+        stock_polo_anterior, ubicaciones_anteriores, historial_anterior, detalle_mudanza_anterior = leer_base_polo_anterior(polo_bytes, polo_filename)
 elif polo_guardado and usar_polo_guardado:
     polo_bytes = polo_guardado["contenido"]
     polo_filename = polo_guardado.get("nombre", "control_polo_guardado.xlsx")
@@ -3968,6 +4044,17 @@ else:
 
 df_pick = pick_items_df()
 df_reimpresion = detalle_excel_a_pick_items(detalle_mudanza_anterior)
+if uploaded_polo is not None and df_reimpresion.empty:
+    st.error(
+        "El archivo cargado como control Polo no tiene detalle de mudanza legible. "
+        "Tiene que ser el Excel de control generado por esta app, no el stock diario de Nodum."
+    )
+if df_pick.empty and df_reimpresion.empty:
+    st.warning(
+        "No hay mudanza activa ni control Polo con detalle cargado. "
+        "El stock diario de Nodum solo actualiza cantidades, pero no trae pallets ni ubicaciones. "
+        "Carga el control de ayer en Base Polo anterior o restaura un backup desde Administracion."
+    )
 df_operativo = df_pick if not df_pick.empty else df_reimpresion
 usando_control_anterior = df_pick.empty and not df_reimpresion.empty
 mudanza_activa_es_control_anterior = misma_mudanza(df_pick, df_reimpresion)
@@ -3991,6 +4078,7 @@ if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not
     st.info(f"El control anterior cargado trae {len(df_reimpresion)} lineas de mudanza.")
     if df_pick.empty:
         if st.button("Usar control anterior como mudanza activa", type="primary"):
+            guardar_backup_mudanza("antes de usar control anterior")
             st.session_state.pick_items = df_reimpresion.to_dict("records")
             st.session_state.pick_seq = int(pd.to_numeric(df_reimpresion["item_id"], errors="coerce").fillna(0).max())
             guardar_mudanza_actual_db(fusionar_con_nube=False)
@@ -3998,6 +4086,7 @@ if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not
             st.rerun()
     else:
         if st.button("Reemplazar mudanza actual por control anterior"):
+            guardar_backup_mudanza("antes de reemplazar por control anterior")
             st.session_state.pick_items = df_reimpresion.to_dict("records")
             st.session_state.pick_seq = int(pd.to_numeric(df_reimpresion["item_id"], errors="coerce").fillna(0).max())
             guardar_mudanza_actual_db(fusionar_con_nube=False)
