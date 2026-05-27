@@ -425,6 +425,7 @@ def guardar_salidas_polo_db() -> None:
             "remito_seq": remito_seq,
         },
     )
+    guardar_backup_operativo_db("salidas_polo")
 
 
 def cargar_salidas_polo_db() -> Dict[str, object]:
@@ -461,6 +462,7 @@ def guardar_salidas_darkinel_db() -> None:
             "remito_darkinel_seq": remito_seq,
         },
     )
+    guardar_backup_operativo_db("salidas_darkinel")
 
 
 def cargar_salidas_darkinel_db() -> Dict[str, object]:
@@ -483,6 +485,7 @@ def guardar_conteo_darkinel_db() -> None:
             "conteos": st.session_state.get("conteo_darkinel", []),
         },
     )
+    guardar_backup_operativo_db("conteo_darkinel")
 
 
 def cargar_conteo_darkinel_db() -> Dict[str, object]:
@@ -491,6 +494,54 @@ def cargar_conteo_darkinel_db() -> Dict[str, object]:
         return {"conteos": []}
     estado.setdefault("conteos", [])
     return estado
+
+
+def generar_backup_operativo_excel(motivo: str = "") -> bytes:
+    output = io.BytesIO()
+    resumen = pd.DataFrame(
+        [
+            {
+                "fecha_hora": ahora_texto(),
+                "motivo": motivo,
+                "conteos_darkinel": len(st.session_state.get("conteo_darkinel", []) or []),
+                "salidas_polo": len(st.session_state.get("salidas_polo", []) or []),
+                "salidas_darkinel": len(st.session_state.get("salidas_darkinel", []) or []),
+                "lineas_mudanza": len(st.session_state.get("pick_items", []) or []),
+            }
+        ]
+    )
+    hojas = {
+        "RESUMEN": resumen,
+        "CONTEO_DARKINEL": pd.DataFrame(st.session_state.get("conteo_darkinel", []) or []),
+        "SALIDAS_POLO": pd.DataFrame(st.session_state.get("salidas_polo", []) or []),
+        "SALIDAS_DARKINEL": pd.DataFrame(st.session_state.get("salidas_darkinel", []) or []),
+        "MUDANZA_ACTIVA": pd.DataFrame(st.session_state.get("pick_items", []) or []),
+    }
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for sheet_name, df in hojas.items():
+            if df is None or df.empty:
+                df = pd.DataFrame([{"sin_datos": ""}])
+            limpiar_df_visible(df).to_excel(writer, index=False, sheet_name=sheet_name)
+        for sheet_name in writer.book.sheetnames:
+            ws = writer.book[sheet_name]
+            ws.freeze_panes = "A2"
+            for col in ws.columns:
+                col_letter = col[0].column_letter
+                max_len = max(min(len("" if cell.value is None else str(cell.value)), 45) for cell in col)
+                ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 47)
+    return output.getvalue()
+
+
+def guardar_backup_operativo_db(motivo: str = "") -> None:
+    try:
+        contenido = generar_backup_operativo_excel(motivo)
+        guardar_archivo_estado(
+            "backup_operativo_ultimo",
+            f"backup_operativo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            contenido,
+        )
+    except Exception:
+        pass
 
 
 def cargar_mudanza_actual_db() -> Dict[str, object]:
@@ -1529,13 +1580,15 @@ def limpiar_df_visible(df: pd.DataFrame) -> pd.DataFrame:
 def salidas_polo_df() -> pd.DataFrame:
     columnas = [
         "salida_id", "remito_num", "fecha_hora", "solicitado_por", "responsable",
-        "codigo_normalizado", "codigo_barra", "articulo", "descripcion", "ubicacion", "cantidad", "observaciones",
+        "codigo_normalizado", "codigo_barra", "articulo", "descripcion", "ubicacion", "cantidad", "estado", "observaciones",
     ]
     df = pd.DataFrame(st.session_state.get("salidas_polo", []))
     if df.empty:
         return pd.DataFrame(columns=columnas)
     for col in columnas:
-        if col not in df.columns:
+        if col == "estado" and col not in df.columns:
+            df[col] = "VENDIDO"
+        elif col not in df.columns:
             df[col] = "" if col not in ["salida_id", "cantidad"] else 0
     df["salida_id"] = pd.to_numeric(df["salida_id"], errors="coerce").fillna(0).astype(int)
     df["remito_num"] = df["remito_num"].fillna("").astype(str).str.strip()
@@ -1547,6 +1600,8 @@ def salidas_polo_df() -> pd.DataFrame:
     df.loc[df["codigo_barra"].eq(""), "codigo_barra"] = df["codigo_normalizado"]
     df["ubicacion"] = df["ubicacion"].map(normalizar_locacion)
     df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
+    df["estado"] = df["estado"].fillna("").astype(str).str.strip().str.upper()
+    df.loc[df["estado"].eq(""), "estado"] = "VENDIDO"
     return df[columnas]
 
 
@@ -1647,9 +1702,12 @@ def conteo_darkinel_resumen_df() -> pd.DataFrame:
 
 
 def mostrar_salidas_polo(df: pd.DataFrame) -> pd.DataFrame:
-    columnas = ["Remito", "Fecha/Hora", "Solicitado por", "Codigo normalizado", "Codigo de barras", "Articulo", "Descripcion", "Locacion", "Cantidad", "Responsable", "Observaciones"]
+    columnas = ["Remito", "Fecha/Hora", "Solicitado por", "Codigo normalizado", "Codigo de barras", "Articulo", "Descripcion", "Locacion", "Cantidad", "Estado", "Responsable", "Observaciones"]
     if df.empty:
         return pd.DataFrame(columns=columnas)
+    df = df.copy()
+    if "estado" not in df.columns:
+        df["estado"] = "VENDIDO"
     salida = df.rename(
         columns={
             "remito_num": "Remito",
@@ -1661,6 +1719,7 @@ def mostrar_salidas_polo(df: pd.DataFrame) -> pd.DataFrame:
             "descripcion": "Descripcion",
             "ubicacion": "Locacion",
             "cantidad": "Cantidad",
+            "estado": "Estado",
             "responsable": "Responsable",
             "observaciones": "Observaciones",
         }
@@ -2057,7 +2116,7 @@ def generar_pdf_gondolas_darkinel(conteos: pd.DataFrame, ubicacion_filtro: str =
     doc.build(story)
     return output.getvalue()
 
-def aplicar_salidas_a_ubicaciones(ubicaciones: pd.DataFrame, salidas: pd.DataFrame) -> pd.DataFrame:
+def aplicar_salidas_a_ubicaciones(ubicaciones: pd.DataFrame, salidas: pd.DataFrame, incluir_vendidos: bool = False) -> pd.DataFrame:
     if ubicaciones is None or ubicaciones.empty:
         return ubicaciones
     trabajo = ubicaciones.copy()
@@ -2078,21 +2137,34 @@ def aplicar_salidas_a_ubicaciones(ubicaciones: pd.DataFrame, salidas: pd.DataFra
     sal["codigo_normalizado"] = sal["codigo_normalizado"].map(normalizar_codigo)
     sal["ubicacion"] = sal["ubicacion"].map(normalizar_locacion)
     sal["cantidad"] = pd.to_numeric(sal["cantidad"], errors="coerce").fillna(0)
+    if "estado" in sal.columns:
+        estados_validos = sal["estado"].fillna("VENDIDO").astype(str).str.strip().str.upper()
+        sal = sal[~estados_validos.isin(["ANULADO", "CANCELADO"])].copy()
+    sal = sal[(sal["codigo_normalizado"] != "") & (sal["ubicacion"] != "") & (sal["cantidad"] > 0)].copy()
+    if sal.empty:
+        return trabajo
     salidas_por_locacion = sal.groupby(["codigo_normalizado", "ubicacion"])["cantidad"].sum().to_dict()
 
     restantes = []
+    estados_linea = []
     for _, row in trabajo.iterrows():
         clave = (row["_codigo_salida"], row["_ubicacion_salida"])
         descontar = float(salidas_por_locacion.get(clave, 0) or 0)
         piezas = float(row["_piezas_num"] or 0)
+        estado_linea = "DISPONIBLE"
         if descontar > 0:
             usado = min(piezas, descontar)
             piezas -= usado
             salidas_por_locacion[clave] = descontar - usado
+            if usado > 0:
+                estado_linea = "VENDIDO" if piezas <= 0 else "PARCIAL"
         restantes.append(piezas)
+        estados_linea.append(estado_linea)
 
     trabajo[piezas_col] = restantes
-    trabajo = trabajo[pd.to_numeric(trabajo[piezas_col], errors="coerce").fillna(0) > 0].copy()
+    trabajo["Estado"] = estados_linea
+    if not incluir_vendidos:
+        trabajo = trabajo[pd.to_numeric(trabajo[piezas_col], errors="coerce").fillna(0) > 0].copy()
     trabajo[piezas_col] = pd.to_numeric(trabajo[piezas_col], errors="coerce").fillna(0).apply(formatear_numero)
     return trabajo.drop(columns=["_codigo_salida", "_ubicacion_salida", "_piezas_num"], errors="ignore")
 
@@ -2112,6 +2184,9 @@ def aplicar_salidas_a_inventario(inventario: pd.DataFrame, salidas: pd.DataFrame
     sal["codigo_normalizado"] = sal["codigo_normalizado"].map(normalizar_codigo)
     sal["ubicacion"] = sal["ubicacion"].map(normalizar_locacion)
     sal["cantidad"] = pd.to_numeric(sal["cantidad"], errors="coerce").fillna(0)
+    if "estado" in sal.columns:
+        estados_validos = sal["estado"].fillna("VENDIDO").astype(str).str.strip().str.upper()
+        sal = sal[~estados_validos.isin(["ANULADO", "CANCELADO"])].copy()
     sal = sal[(sal["codigo_normalizado"] != "") & (sal["cantidad"] > 0)].copy()
     if sal.empty:
         return trabajo
@@ -3456,6 +3531,7 @@ def generar_excel_control(
     recepcion = limpiar_df_visible(preparar_recepcion_polo(df_pick))
     salidas_export = limpiar_df_visible(mostrar_salidas_polo(salidas_polo_df() if salidas_polo is None else salidas_polo))
     salidas_darkinel_export = limpiar_df_visible(mostrar_salidas_polo(salidas_darkinel_df() if salidas_darkinel is None else salidas_darkinel))
+    conteos_darkinel_export = limpiar_df_visible(conteo_darkinel_df())
     balance = limpiar_df_visible(balance_darkinel_polo(stock_consolidado, df_pick, stock_polo_anterior, ubicaciones_anteriores, salidas_polo))
 
     resumen_depositos = pd.DataFrame(
@@ -3484,6 +3560,7 @@ def generar_excel_control(
         historial.to_excel(writer, index=False, sheet_name="HISTORIAL_MUDANZAS")
         salidas_export.to_excel(writer, index=False, sheet_name="SALIDAS_POLO")
         salidas_darkinel_export.to_excel(writer, index=False, sheet_name="SALIDAS_DARKINEL")
+        conteos_darkinel_export.to_excel(writer, index=False, sheet_name="CONTEO_DARKINEL")
         recepcion.to_excel(writer, index=False, sheet_name="RECEPCION_POLO")
         resumen.to_excel(writer, index=False, sheet_name="COMPOSICION_PALLETS")
         detalle.to_excel(writer, index=False, sheet_name="DETALLE_MUDANZA")
@@ -4120,6 +4197,38 @@ df_operativo = df_pick if not df_pick.empty else df_reimpresion
 usando_control_anterior = df_pick.empty and not df_reimpresion.empty
 mudanza_activa_es_control_anterior = misma_mudanza(df_pick, df_reimpresion)
 ubicaciones_operativas = pd.DataFrame() if usando_control_anterior or mudanza_activa_es_control_anterior else ubicaciones_anteriores
+estado_salidas_polo_runtime = cargar_salidas_polo_db()
+if estado_salidas_polo_runtime:
+    st.session_state.salidas_polo = fusionar_salidas(
+        estado_salidas_polo_runtime.get("salidas", []),
+        st.session_state.get("salidas_polo", []),
+    )
+    st.session_state.salida_seq = max(
+        int(st.session_state.get("salida_seq", 0) or 0),
+        int(estado_salidas_polo_runtime.get("salida_seq", 0) or 0),
+        max([int(x.get("salida_id", 0) or 0) for x in st.session_state.salidas_polo if isinstance(x, dict)] or [0]),
+    )
+    st.session_state.remito_seq = max(
+        int(st.session_state.get("remito_seq", 0) or 0),
+        int(estado_salidas_polo_runtime.get("remito_seq", 0) or 0),
+        st.session_state.salida_seq,
+    )
+estado_salidas_darkinel_runtime = cargar_salidas_darkinel_db()
+if estado_salidas_darkinel_runtime:
+    st.session_state.salidas_darkinel = fusionar_salidas(
+        estado_salidas_darkinel_runtime.get("salidas", []),
+        st.session_state.get("salidas_darkinel", []),
+    )
+    st.session_state.salida_darkinel_seq = max(
+        int(st.session_state.get("salida_darkinel_seq", 0) or 0),
+        int(estado_salidas_darkinel_runtime.get("salida_seq", 0) or 0),
+        max([int(x.get("salida_id", 0) or 0) for x in st.session_state.salidas_darkinel if isinstance(x, dict)] or [0]),
+    )
+    st.session_state.remito_darkinel_seq = max(
+        int(st.session_state.get("remito_darkinel_seq", 0) or 0),
+        int(estado_salidas_darkinel_runtime.get("remito_seq", 0) or 0),
+        st.session_state.salida_darkinel_seq,
+    )
 salidas_polo_actual = salidas_polo_df()
 salidas_darkinel_actual = salidas_darkinel_df()
 stock_darkinel_metric = stock_darkinel_actualizado(stock_consolidado, df_operativo)
@@ -4614,6 +4723,21 @@ with tab_pallets:
             file_name=f"detalle_mudanza_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
             mime="text/csv",
         )
+        backup_manual = generar_backup_operativo_excel("descarga_manual")
+        st.download_button(
+            "Descargar backup operativo Excel",
+            data=backup_manual,
+            file_name=f"backup_operativo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        backup_guardado = cargar_archivo_estado("backup_operativo_ultimo")
+        if backup_guardado:
+            st.download_button(
+                "Descargar ultimo backup guardado",
+                data=backup_guardado["contenido"],
+                file_name=str(backup_guardado.get("nombre") or "backup_operativo_ultimo.xlsx"),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
         st.markdown("---")
         st.subheader("Hoja A4 con codigos de barras")
@@ -5010,6 +5134,7 @@ with tab_salidas:
                             "descripcion": fila_sel["descripcion"],
                             "ubicacion": fila_sel["ubicacion"],
                             "cantidad": float(cantidad_salida),
+                            "estado": "VENDIDO",
                             "responsable": responsable,
                             "observaciones": observaciones,
                         }
@@ -5258,6 +5383,13 @@ with tab_bases:
                     data=pdf_gondola,
                     file_name=f"gondola_darkinel_{nombre_pdf}.pdf",
                     mime="application/pdf",
+                )
+                st.download_button(
+                    "Descargar respaldo Excel de conteos",
+                    data=generar_backup_operativo_excel(f"pdf_gondola_{nombre_pdf}"),
+                    file_name=f"backup_conteos_darkinel_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"backup_conteos_darkinel_{nombre_pdf}",
                 )
             else:
                 st.warning("No hay datos para generar el PDF de esa locacion.")
