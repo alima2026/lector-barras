@@ -2,7 +2,7 @@ import io
 import json
 import math
 import re
-import sqlite3
+import os
 import base64
 import hashlib
 import uuid
@@ -21,6 +21,16 @@ try:
     REQUESTS_DISPONIBLE = True
 except ModuleNotFoundError:
     REQUESTS_DISPONIBLE = False
+
+try:
+    import psycopg2
+    from psycopg2.extras import Json
+
+    POSTGRES_DISPONIBLE = True
+except ModuleNotFoundError:
+    psycopg2 = None
+    Json = None
+    POSTGRES_DISPONIBLE = False
 
 try:
     from reportlab.graphics.barcode import code128
@@ -52,7 +62,13 @@ st.set_page_config(
 # -----------------------------
 # NormalizaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n de cÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digos
 # -----------------------------
-DB_PATH = Path(__file__).resolve().parent / "data" / "mudanza_estado.sqlite"
+POSTGRES_DEFAULTS = {
+    "host": "localhost",
+    "port": "5432",
+    "database": "deposito",
+    "user": "deposito_user",
+    "password": "deposito_pass_cambiar",
+}
 CLOUD_TABLE = "estado_app"
 
 
@@ -60,155 +76,131 @@ def ahora_texto() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def supabase_config() -> Dict[str, str]:
+def postgres_config() -> Dict[str, str]:
     try:
-        cfg = st.secrets.get("supabase", {})
+        cfg = st.secrets.get("postgres", {})
     except Exception:
         cfg = {}
-    url = str(cfg.get("url", "")).strip().rstrip("/")
-    key = str(cfg.get("service_role_key") or cfg.get("anon_key") or cfg.get("key", "")).strip()
-    table = str(cfg.get("table", CLOUD_TABLE)).strip() or CLOUD_TABLE
-    return {"url": url, "key": key, "table": table}
+
+    return {
+        "host": str(cfg.get("host") or os.environ.get("POSTGRES_HOST") or POSTGRES_DEFAULTS["host"]).strip(),
+        "port": str(cfg.get("port") or os.environ.get("POSTGRES_PORT") or POSTGRES_DEFAULTS["port"]).strip(),
+        "database": str(cfg.get("database") or cfg.get("dbname") or os.environ.get("POSTGRES_DB") or POSTGRES_DEFAULTS["database"]).strip(),
+        "user": str(cfg.get("user") or os.environ.get("POSTGRES_USER") or POSTGRES_DEFAULTS["user"]).strip(),
+        "password": str(cfg.get("password") or os.environ.get("POSTGRES_PASSWORD") or POSTGRES_DEFAULTS["password"]).strip(),
+    }
+
+
+def registrar_error_db(error: Exception) -> None:
+    try:
+        st.session_state["ultimo_error_db"] = str(error)
+    except Exception:
+        pass
+
+
+def conectar_db():
+    if not POSTGRES_DISPONIBLE:
+        raise RuntimeError("Falta instalar psycopg2-binary para conectar con PostgreSQL.")
+    cfg = postgres_config()
+    conn = psycopg2.connect(
+        host=cfg["host"],
+        port=cfg["port"],
+        dbname=cfg["database"],
+        user=cfg["user"],
+        password=cfg["password"],
+        connect_timeout=5,
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS estado_app (
+                clave TEXT PRIMARY KEY,
+                valor JSONB NOT NULL,
+                actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+    conn.commit()
+    return conn
 
 
 def nube_disponible() -> bool:
-    cfg = supabase_config()
-    return bool(REQUESTS_DISPONIBLE and cfg["url"] and cfg["key"])
+    if not POSTGRES_DISPONIBLE:
+        return False
+    try:
+        with conectar_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        return True
+    except Exception as exc:
+        registrar_error_db(exc)
+        return False
 
 
-def supabase_headers(prefer: str = "") -> Dict[str, str]:
-    cfg = supabase_config()
-    headers = {
-        "apikey": cfg["key"],
-        "Authorization": f"Bearer {cfg['key']}",
-        "Content-Type": "application/json",
-    }
-    if prefer:
-        headers["Prefer"] = prefer
-    return headers
+def guardar_estado_db(clave: str, valor) -> None:
+    try:
+        with conectar_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO estado_app (clave, valor, actualizado_en)
+                    VALUES (%s, %s, now())
+                    ON CONFLICT(clave) DO UPDATE SET
+                        valor = excluded.valor,
+                        actualizado_en = excluded.actualizado_en
+                    """,
+                    (clave, Json(valor)),
+                )
+            conn.commit()
+    except Exception as exc:
+        registrar_error_db(exc)
+        raise
 
 
-def supabase_endpoint(clave: str = "") -> str:
-    cfg = supabase_config()
-    base = f"{cfg['url']}/rest/v1/{cfg['table']}"
-    if clave:
-        return f"{base}?clave=eq.{quote(clave)}"
-    return base
+def cargar_estado_db(clave: str, defecto):
+    try:
+        with conectar_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT valor FROM estado_app WHERE clave = %s", (clave,))
+                row = cur.fetchone()
+        if not row:
+            return defecto
+        valor = row[0]
+        if isinstance(valor, str):
+            return json.loads(valor)
+        return valor
+    except Exception as exc:
+        registrar_error_db(exc)
+        return defecto
+
+
+def fecha_estado_db(clave: str) -> str:
+    try:
+        with conectar_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT to_char(actualizado_en, 'YYYY-MM-DD HH24:MI:SS') FROM estado_app WHERE clave = %s", (clave,))
+                row = cur.fetchone()
+        return "" if not row else str(row[0])
+    except Exception as exc:
+        registrar_error_db(exc)
+        return ""
+
+
+def cargar_estado_nube(clave: str, defecto):
+    return cargar_estado_db(clave, defecto)
 
 
 def guardar_estado_nube(clave: str, valor) -> bool:
-    if not nube_disponible():
-        return False
     try:
-        payload = {
-            "clave": clave,
-            "valor": json.dumps(valor, ensure_ascii=False, default=str),
-            "actualizado_en": ahora_texto(),
-        }
-        resp = requests.post(
-            supabase_endpoint(),
-            headers=supabase_headers("resolution=merge-duplicates"),
-            json=payload,
-            timeout=20,
-        )
-        resp.raise_for_status()
+        guardar_estado_db(clave, valor)
         return True
     except Exception:
         return False
 
 
-def cargar_estado_nube(clave: str, defecto):
-    if not nube_disponible():
-        return defecto
-    try:
-        resp = requests.get(
-            f"{supabase_endpoint(clave)}&select=valor",
-            headers=supabase_headers(),
-            timeout=20,
-        )
-        resp.raise_for_status()
-        rows = resp.json()
-        if not rows:
-            return defecto
-        return json.loads(rows[0]["valor"])
-    except Exception:
-        return defecto
-
-
 def fecha_estado_nube(clave: str) -> str:
-    if not nube_disponible():
-        return ""
-    try:
-        resp = requests.get(
-            f"{supabase_endpoint(clave)}&select=actualizado_en",
-            headers=supabase_headers(),
-            timeout=20,
-        )
-        resp.raise_for_status()
-        rows = resp.json()
-        return "" if not rows else str(rows[0].get("actualizado_en", ""))
-    except Exception:
-        return ""
-
-
-def conectar_db() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS estado_app (
-            clave TEXT PRIMARY KEY,
-            valor TEXT NOT NULL,
-            actualizado_en TEXT NOT NULL
-        )
-        """
-    )
-    return conn
-
-
-def guardar_estado_db(clave: str, valor) -> None:
-    try:
-        payload = json.dumps(valor, ensure_ascii=False, default=str)
-        ahora = ahora_texto()
-        with conectar_db() as conn:
-            conn.execute(
-                """
-                INSERT INTO estado_app (clave, valor, actualizado_en)
-                VALUES (?, ?, ?)
-                ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
-                """,
-                (clave, payload, ahora),
-            )
-    except Exception:
-        pass
-    guardar_estado_nube(clave, valor)
-
-
-def cargar_estado_db(clave: str, defecto):
-    estado_nube = cargar_estado_nube(clave, None)
-    if estado_nube is not None:
-        return estado_nube
-    try:
-        with conectar_db() as conn:
-            row = conn.execute("SELECT valor FROM estado_app WHERE clave = ?", (clave,)).fetchone()
-        if not row:
-            return defecto
-        return json.loads(row[0])
-    except Exception:
-        return defecto
-
-
-def fecha_estado_db(clave: str) -> str:
-    fecha_nube = fecha_estado_nube(clave)
-    if fecha_nube:
-        return fecha_nube
-    try:
-        with conectar_db() as conn:
-            row = conn.execute("SELECT actualizado_en FROM estado_app WHERE clave = ?", (clave,)).fetchone()
-        return "" if not row else str(row[0])
-    except Exception:
-        return ""
-
+    return fecha_estado_db(clave)
 
 def firma_item_mudanza(item: dict) -> str:
     item_id = str(item.get("item_id", "")).strip()
@@ -1107,6 +1099,63 @@ def leer_frecuencia_desde_ventas_mensuales(file_bytes: bytes, filename: str) -> 
     return resumen[["codigo_normalizado", "frecuencia", "meses_venta"]]
 
 
+def leer_ventas_mensuales_detalle(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    nombre = filename.lower()
+    columnas = ["codigo_normalizado", "descripcion_venta", "fecha_venta", "unidades_vendidas"]
+    if not file_bytes or not nombre.endswith((".xls", ".xlsx", ".xlsm")):
+        return pd.DataFrame(columns=columnas)
+
+    buffer = io.BytesIO(file_bytes)
+    engine = "xlrd" if nombre.endswith(".xls") else "openpyxl"
+    try:
+        xls = pd.ExcelFile(buffer, engine=engine)
+    except Exception:
+        return pd.DataFrame(columns=columnas)
+
+    primera_fecha = fecha_mes_hoja(xls.sheet_names[0]) if xls.sheet_names else None
+    ventas = []
+    for idx, sheet_name in enumerate(xls.sheet_names):
+        fecha_mes = fecha_mes_hoja(sheet_name)
+        if primera_fecha is not None:
+            fecha_secuencial = fecha_mes_desde_indice(primera_fecha, idx)
+            if fecha_mes is None or fecha_mes < fecha_secuencial.replace(year=fecha_secuencial.year - 1):
+                fecha_mes = fecha_secuencial
+        if fecha_mes is None:
+            continue
+
+        df = pd.read_excel(xls, sheet_name=sheet_name, header=None, dtype=object)
+        if df.shape[0] < 3 or df.shape[1] < 4:
+            continue
+        col_ventas = 3
+        for fila_hdr in list(range(1, min(5, len(df)))) + [0]:
+            for col_hdr, valor_hdr in df.iloc[fila_hdr].items():
+                if normalizar_codigo(valor_hdr) == "VENTAS":
+                    col_ventas = int(col_hdr)
+                    break
+            else:
+                continue
+            break
+
+        for row_idx in range(2, len(df)):
+            row = df.iloc[row_idx]
+            codigo = normalizar_codigo(row.iloc[0] if len(row) > 0 else "")
+            if not codigo or codigo in ["PRODUCTO", "TOTAL"]:
+                continue
+            cantidad = pd.to_numeric(row.iloc[col_ventas] if len(row) > col_ventas else 0, errors="coerce")
+            if pd.isna(cantidad) or float(cantidad) <= 0:
+                continue
+            ventas.append(
+                {
+                    "codigo_normalizado": codigo,
+                    "descripcion_venta": "" if len(row) < 2 or pd.isna(row.iloc[1]) else str(row.iloc[1]).strip(),
+                    "fecha_venta": fecha_mes,
+                    "unidades_vendidas": float(cantidad),
+                }
+            )
+
+    return pd.DataFrame(ventas, columns=columnas)
+
+
 def leer_frecuencias(file_bytes: bytes, filename: str) -> pd.DataFrame:
     if not file_bytes:
         return pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
@@ -1285,6 +1334,21 @@ def mapa_frecuencia(frecuencias: pd.DataFrame) -> Dict[str, str]:
     trabajo["frecuencia"] = trabajo["frecuencia"].fillna("").astype(str).str.strip()
     trabajo = trabajo[trabajo["codigo_normalizado"] != ""]
     return dict(zip(trabajo["codigo_normalizado"], trabajo["frecuencia"]))
+
+
+def mapa_meses_venta(frecuencias: pd.DataFrame) -> Dict[str, float]:
+    if frecuencias is None or frecuencias.empty:
+        return {}
+    if "codigo_normalizado" not in frecuencias.columns or "meses_venta" not in frecuencias.columns:
+        return {}
+    trabajo = frecuencias[["codigo_normalizado", "meses_venta"]].copy()
+    trabajo["codigo_normalizado"] = trabajo["codigo_normalizado"].map(normalizar_codigo)
+    trabajo["meses_venta"] = pd.to_numeric(trabajo["meses_venta"], errors="coerce")
+    trabajo = trabajo[(trabajo["codigo_normalizado"] != "") & trabajo["meses_venta"].notna()].copy()
+    if trabajo.empty:
+        return {}
+    trabajo = trabajo.sort_values("meses_venta").drop_duplicates("codigo_normalizado", keep="first")
+    return dict(zip(trabajo["codigo_normalizado"], trabajo["meses_venta"]))
 
 
 def inventario_para_buscar(
@@ -1699,6 +1763,355 @@ def conteo_darkinel_resumen_df() -> pd.DataFrame:
         )
     )
     return resumen
+
+
+def resumen_ventas_para_pedidos(ventas: pd.DataFrame, meses_promedio: int) -> pd.DataFrame:
+    columnas = ["codigo_normalizado", "Venta mensual", "Venta periodo", "Meses considerados", "Ultima venta", "Descripcion venta"]
+    if ventas is None or ventas.empty:
+        return pd.DataFrame(columns=columnas)
+    trabajo = ventas.copy()
+    trabajo["codigo_normalizado"] = trabajo["codigo_normalizado"].map(normalizar_codigo)
+    trabajo["fecha_venta"] = pd.to_datetime(trabajo["fecha_venta"], errors="coerce")
+    trabajo["unidades_vendidas"] = pd.to_numeric(trabajo["unidades_vendidas"], errors="coerce").fillna(0)
+    trabajo = trabajo[(trabajo["codigo_normalizado"] != "") & trabajo["fecha_venta"].notna() & (trabajo["unidades_vendidas"] > 0)].copy()
+    if trabajo.empty:
+        return pd.DataFrame(columns=columnas)
+    fecha_ref = trabajo["fecha_venta"].max()
+    meses_promedio = max(int(meses_promedio or 1), 1)
+    desde_mes = fecha_mes_desde_indice(fecha_ref, -(meses_promedio - 1))
+    recientes = trabajo[trabajo["fecha_venta"] >= desde_mes].copy()
+    resumen = (
+        recientes.groupby("codigo_normalizado", as_index=False)
+        .agg(
+            **{
+                "Venta periodo": ("unidades_vendidas", "sum"),
+                "Descripcion venta": ("descripcion_venta", _primer_valor_no_vacio),
+                "Ultima venta": ("fecha_venta", "max"),
+            }
+        )
+    )
+    resumen["Venta mensual"] = resumen["Venta periodo"] / meses_promedio
+    resumen["Meses considerados"] = meses_promedio
+    return resumen[columnas]
+
+
+def preparar_sugerencia_pedidos(
+    balance: pd.DataFrame,
+    frecuencias: pd.DataFrame,
+    ventas_detalle: pd.DataFrame,
+    meses_promedio: int,
+    cobertura_extra_meses: float,
+    incluir_sin_venta: bool = False,
+) -> pd.DataFrame:
+    columnas = [
+        "Codigo normalizado", "Articulo", "Descripcion", "Frecuencia", "Meses sin venta", "Politica JIT", "Venta mensual",
+        "Stock fisico", "Stock Darkinel", "Stock Polo", "Cobertura meses", "Cobertura dias",
+        "Via sugerida", "Cantidad sugerida", "Objetivo stock", "Llegada estimada dias",
+        "Pedido maritimo 6 meses", "Pedido aereo 35 dias", "Pedido VOR 20 dias", "Motivo",
+    ]
+    if balance is None or balance.empty:
+        return pd.DataFrame(columns=columnas)
+    base = balance.copy()
+    base["Codigo normalizado"] = base["Codigo normalizado"].map(normalizar_codigo)
+    base = base[base["Codigo normalizado"] != ""].copy()
+    base["Stock Polo"] = pd.to_numeric(base.get("Disponible en Polo", 0), errors="coerce").fillna(0)
+    base["Stock Darkinel"] = pd.to_numeric(base.get("Conteo fisico Darkinel", pd.NA), errors="coerce")
+    base["Stock Darkinel"] = base["Stock Darkinel"].fillna(pd.to_numeric(base.get("Restante esperado Darkinel", 0), errors="coerce").fillna(0))
+    base["Stock fisico"] = base["Stock Darkinel"] + base["Stock Polo"]
+
+    ventas_resumen = resumen_ventas_para_pedidos(ventas_detalle, meses_promedio)
+    if not ventas_resumen.empty:
+        base = base.merge(ventas_resumen, left_on="Codigo normalizado", right_on="codigo_normalizado", how="left")
+    else:
+        base["Venta mensual"] = 0
+        base["Venta periodo"] = 0
+        base["Ultima venta"] = pd.NaT
+        base["Descripcion venta"] = ""
+    base["Venta mensual"] = pd.to_numeric(base.get("Venta mensual", 0), errors="coerce").fillna(0)
+    base["Frecuencia"] = base["Codigo normalizado"].map(mapa_frecuencia(frecuencias)).fillna("Sin ventas registradas") if frecuencias is not None and not frecuencias.empty else "Sin ventas registradas"
+    base["Meses sin venta"] = base["Codigo normalizado"].map(mapa_meses_venta(frecuencias))
+    base["Politica JIT"] = "JIT normal"
+    base.loc[pd.to_numeric(base["Meses sin venta"], errors="coerce") > 18, "Politica JIT"] = "OFERTA: mas de 18 meses sin venta"
+    base.loc[pd.to_numeric(base["Meses sin venta"], errors="coerce") > 24, "Politica JIT"] = "RETIRAR GONDOLA: mas de 24 meses"
+    base.loc[pd.to_numeric(base["Meses sin venta"], errors="coerce") > 40, "Politica JIT"] = "STOCK MUERTO / SCRAP: mas de 40 meses"
+
+    lead_maritimo = 6.0
+    lead_aereo = 35 / 30
+    lead_vor = 20 / 30
+    extra = max(float(cobertura_extra_meses or 0), 0)
+    demanda = base["Venta mensual"]
+    stock = base["Stock fisico"]
+    base["Cobertura meses"] = stock.where(demanda <= 0, stock / demanda.replace(0, pd.NA))
+    base["Cobertura dias"] = base["Cobertura meses"] * 30
+    base["Pedido maritimo 6 meses"] = ((demanda * (lead_maritimo + extra)) - stock).clip(lower=0).apply(math.ceil)
+    base["Pedido aereo 35 dias"] = ((demanda * (lead_aereo + extra)) - stock).clip(lower=0).apply(math.ceil)
+    base["Pedido VOR 20 dias"] = ((demanda * (lead_vor + extra)) - stock).clip(lower=0).apply(math.ceil)
+    base["Via sugerida"] = "NO PEDIR"
+    base["Cantidad sugerida"] = 0
+    base["Objetivo stock"] = 0
+    base["Llegada estimada dias"] = 0
+    base["Motivo"] = "Sin venta mensual"
+
+    con_venta = demanda > 0
+    cobertura = base["Cobertura meses"].fillna(9999)
+    urgente_vor = con_venta & (cobertura <= lead_vor)
+    urgente_aereo = con_venta & (cobertura > lead_vor) & (cobertura <= lead_aereo)
+    maritimo = con_venta & (cobertura > lead_aereo) & (cobertura <= lead_maritimo + extra)
+
+    base.loc[urgente_vor, "Via sugerida"] = "AEREO VOR 20 dias"
+    base.loc[urgente_vor, "Cantidad sugerida"] = base.loc[urgente_vor, "Pedido VOR 20 dias"]
+    base.loc[urgente_vor, "Objetivo stock"] = (demanda.loc[urgente_vor] * (lead_vor + extra)).apply(math.ceil)
+    base.loc[urgente_vor, "Llegada estimada dias"] = 20
+    base.loc[urgente_vor, "Motivo"] = "Stock no cubre 20 dias"
+
+    base.loc[urgente_aereo, "Via sugerida"] = "AEREO 35 dias"
+    base.loc[urgente_aereo, "Cantidad sugerida"] = base.loc[urgente_aereo, "Pedido aereo 35 dias"]
+    base.loc[urgente_aereo, "Objetivo stock"] = (demanda.loc[urgente_aereo] * (lead_aereo + extra)).apply(math.ceil)
+    base.loc[urgente_aereo, "Llegada estimada dias"] = 35
+    base.loc[urgente_aereo, "Motivo"] = "Stock no cubre 35 dias"
+
+    base.loc[maritimo, "Via sugerida"] = "MARITIMO 6 meses"
+    base.loc[maritimo, "Cantidad sugerida"] = base.loc[maritimo, "Pedido maritimo 6 meses"]
+    base.loc[maritimo, "Objetivo stock"] = (demanda.loc[maritimo] * (lead_maritimo + extra)).apply(math.ceil)
+    base.loc[maritimo, "Llegada estimada dias"] = 180
+    base.loc[maritimo, "Motivo"] = "Reponer para cubrir lead time maritimo"
+    base.loc[con_venta & ~(urgente_vor | urgente_aereo | maritimo), "Motivo"] = "Stock cubre el plazo configurado"
+
+    meses_sin_venta = pd.to_numeric(base["Meses sin venta"], errors="coerce")
+    bloquear_pedido = meses_sin_venta > 18
+    base.loc[bloquear_pedido, "Cantidad sugerida"] = 0
+    base.loc[bloquear_pedido, "Objetivo stock"] = 0
+    base.loc[bloquear_pedido, "Llegada estimada dias"] = 0
+    base.loc[(meses_sin_venta > 18) & (meses_sin_venta <= 24), "Via sugerida"] = "OFERTA / NO PEDIR"
+    base.loc[(meses_sin_venta > 18) & (meses_sin_venta <= 24), "Motivo"] = "No reponer: mas de 18 meses sin venta, pasar a oferta"
+    base.loc[(meses_sin_venta > 24) & (meses_sin_venta <= 40), "Via sugerida"] = "RETIRAR GONDOLA"
+    base.loc[(meses_sin_venta > 24) & (meses_sin_venta <= 40), "Motivo"] = "No reponer: supera 24 meses en gondola"
+    base.loc[meses_sin_venta > 40, "Via sugerida"] = "STOCK MUERTO / SCRAP"
+    base.loc[meses_sin_venta > 40, "Motivo"] = "No reponer: supera 40 meses, mandar a stock muerto/scrap"
+
+    for col in ["Articulo", "Descripcion"]:
+        if col not in base.columns:
+            base[col] = ""
+        base[col] = base[col].fillna("").astype(str)
+    if "Descripcion venta" in base.columns:
+        base.loc[base["Descripcion"].eq("") & base["Descripcion venta"].fillna("").astype(str).ne(""), "Descripcion"] = base["Descripcion venta"]
+    if not incluir_sin_venta:
+        base = base[base["Venta mensual"] > 0].copy()
+    base = base.sort_values(["Via sugerida", "Cobertura dias", "Venta mensual"], ascending=[True, True, False])
+    return base[columnas].reset_index(drop=True)
+
+
+def cargar_backorders_db() -> Dict[str, object]:
+    estado = cargar_estado_db("pedidos_backorder", {"pedidos": [], "pedido_seq": 0})
+    if not isinstance(estado, dict):
+        return {"pedidos": [], "pedido_seq": 0}
+    estado.setdefault("pedidos", [])
+    estado.setdefault("pedido_seq", 0)
+    return estado
+
+
+def guardar_backorders_db(estado: Dict[str, object]) -> None:
+    guardar_estado_db("pedidos_backorder", estado)
+
+
+def cargar_reglas_pedidos_db() -> Dict[str, object]:
+    estado = cargar_estado_db("pedidos_reglas_usuario", {"reglas": {}})
+    if not isinstance(estado, dict):
+        return {"reglas": {}}
+    reglas = estado.get("reglas", {})
+    if not isinstance(reglas, dict):
+        reglas = {}
+    return {"reglas": reglas}
+
+
+def guardar_reglas_pedidos_db(estado: Dict[str, object]) -> None:
+    guardar_estado_db("pedidos_reglas_usuario", estado)
+
+
+def aplicar_reglas_usuario_pedidos(pedidos: pd.DataFrame) -> pd.DataFrame:
+    if pedidos is None or pedidos.empty:
+        return pedidos
+    reglas = cargar_reglas_pedidos_db().get("reglas", {})
+    salida = pedidos.copy()
+    salida["Decision usuario"] = ""
+    salida["Comentario usuario"] = ""
+    for idx, row in salida.iterrows():
+        codigo = normalizar_codigo(row.get("Codigo normalizado", ""))
+        regla = reglas.get(codigo, {}) if isinstance(reglas, dict) else {}
+        decision = str(regla.get("decision", "") or "").strip()
+        comentario = str(regla.get("comentario", "") or "").strip()
+        if decision:
+            salida.at[idx, "Decision usuario"] = decision
+            salida.at[idx, "Comentario usuario"] = comentario
+        if decision in ["NO PEDIR ESTA VEZ", "NO PEDIR MAS", "PEDIDO ESPECIAL", "ESTACIONAL/ZAFRAL", "OFERTA PUNTUAL"]:
+            salida.at[idx, "Cantidad sugerida"] = 0
+            salida.at[idx, "Objetivo stock"] = 0
+            salida.at[idx, "Via sugerida"] = decision
+            salida.at[idx, "Motivo"] = comentario or f"Regla usuario: {decision}"
+    return salida
+
+
+def guardar_aprendizaje_pedido(editor: pd.DataFrame) -> None:
+    if editor is None or editor.empty:
+        return
+    estado = cargar_reglas_pedidos_db()
+    reglas = estado.get("reglas", {})
+    for row in editor.to_dict("records"):
+        codigo = normalizar_codigo(row.get("Codigo normalizado", ""))
+        if not codigo:
+            continue
+        decision = str(row.get("Decision usuario", "") or "").strip()
+        comentario = str(row.get("Comentario usuario", "") or "").strip()
+        qty = pd.to_numeric(row.get("QTY", 0), errors="coerce")
+        if pd.isna(qty):
+            qty = 0
+        if decision or comentario or float(qty) <= 0:
+            reglas[codigo] = {
+                "decision": decision or ("NO PEDIR ESTA VEZ" if float(qty) <= 0 else ""),
+                "comentario": comentario,
+                "actualizado_en": ahora_texto(),
+            }
+    guardar_reglas_pedidos_db({"reglas": reglas})
+
+
+def armar_excel_pedido_mail(editor: pd.DataFrame, manuales: list[dict] | None = None) -> bytes:
+    filas = []
+    if editor is not None and not editor.empty:
+        for row in editor.to_dict("records"):
+            qty = pd.to_numeric(row.get("QTY", 0), errors="coerce")
+            if pd.isna(qty) or float(qty) <= 0:
+                continue
+            code = str(row.get("CODE", "") or "").strip().upper()
+            order = str(row.get("ORDER", "") or "").strip().upper()
+            if code and order:
+                filas.append({"ORDER": order, "CODE": code, "QTY": float(qty)})
+    for row in manuales or []:
+        qty = pd.to_numeric(row.get("QTY", 0), errors="coerce")
+        if pd.isna(qty) or float(qty) <= 0:
+            continue
+        code = str(row.get("CODE", "") or "").strip().upper()
+        order = str(row.get("ORDER", "") or "").strip().upper()
+        if code and order:
+            filas.append({"ORDER": order, "CODE": code, "QTY": float(qty)})
+    salida = pd.DataFrame(filas, columns=["ORDER", "CODE", "QTY"])
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        salida.to_excel(writer, index=False, sheet_name="ORDER")
+    return buffer.getvalue()
+
+
+def crear_backorder_desde_sugerencia(pedidos: pd.DataFrame, observaciones: str = "") -> Dict[str, object]:
+    estado = cargar_backorders_db()
+    existentes = estado.get("pedidos", [])
+    pedido_seq = int(estado.get("pedido_seq", 0) or 0) + 1
+    ahora = ahora_texto()
+    base = pedidos.copy() if pedidos is not None else pd.DataFrame()
+    if base.empty:
+        return estado
+    base["Cantidad sugerida"] = pd.to_numeric(base.get("Cantidad sugerida", 0), errors="coerce").fillna(0)
+    base = base[base["Cantidad sugerida"] > 0].copy()
+    if base.empty:
+        return estado
+    lineas = []
+    for idx, row in base.reset_index(drop=True).iterrows():
+        cantidad = float(row.get("Cantidad sugerida", 0) or 0)
+        lineas.append(
+            {
+                "linea_id": idx + 1,
+                "codigo_normalizado": normalizar_codigo(row.get("Codigo normalizado", "")),
+                "articulo": str(row.get("Articulo", "") or "").strip(),
+                "descripcion": str(row.get("Descripcion", "") or "").strip(),
+                "via": str(row.get("Via sugerida", "") or "").strip(),
+                "cantidad_pedida": cantidad,
+                "cantidad_pendiente_manual": cantidad,
+                "fecha_pedido": ahora,
+                "estado": "BACK ORDER",
+                "observaciones": observaciones,
+            }
+        )
+    existentes.append(
+        {
+            "pedido_id": pedido_seq,
+            "fecha_pedido": ahora,
+            "estado": "BACK ORDER",
+            "observaciones": observaciones,
+            "lineas": lineas,
+        }
+    )
+    estado = {"pedidos": existentes[-50:], "pedido_seq": pedido_seq}
+    guardar_backorders_db(estado)
+    return estado
+
+
+def evaluar_backorders(estado: Dict[str, object], pedidos_actuales: pd.DataFrame) -> pd.DataFrame:
+    columnas = [
+        "Pedido", "Fecha pedido", "Dias pendiente", "Estado control", "Accion",
+        "Codigo normalizado", "Articulo", "Descripcion", "Via original", "Via actual",
+        "Cantidad pedida", "Pendiente manual", "Pendiente segun JIT", "Stock fisico",
+        "Venta mensual", "Cobertura dias", "Motivo actual", "Observaciones",
+    ]
+    if not isinstance(estado, dict) or not estado.get("pedidos"):
+        return pd.DataFrame(columns=columnas)
+
+    actual = pedidos_actuales.copy() if pedidos_actuales is not None else pd.DataFrame()
+    if not actual.empty and "Codigo normalizado" in actual.columns:
+        actual["Codigo normalizado"] = actual["Codigo normalizado"].map(normalizar_codigo)
+        actual = actual.sort_values("Cantidad sugerida", ascending=False).drop_duplicates("Codigo normalizado", keep="first")
+        actual_map = actual.set_index("Codigo normalizado").to_dict("index")
+    else:
+        actual_map = {}
+
+    filas = []
+    hoy = datetime.now()
+    for pedido in estado.get("pedidos", []):
+        fecha_txt = str(pedido.get("fecha_pedido", "") or "")
+        try:
+            fecha_dt = datetime.strptime(fecha_txt[:19], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            fecha_dt = hoy
+        dias = max((hoy - fecha_dt).days, 0)
+        for linea in pedido.get("lineas", []):
+            codigo = normalizar_codigo(linea.get("codigo_normalizado", ""))
+            cur = actual_map.get(codigo, {})
+            pendiente_manual = float(pd.to_numeric(linea.get("cantidad_pendiente_manual", linea.get("cantidad_pedida", 0)), errors="coerce") or 0)
+            pendiente_jit = float(pd.to_numeric(cur.get("Cantidad sugerida", 0), errors="coerce") or 0)
+            pendiente_ajustado = min(pendiente_manual, pendiente_jit) if pendiente_jit > 0 else 0
+            via_actual = str(cur.get("Via sugerida", "NO PEDIR") or "NO PEDIR")
+            if dias > 180 and pendiente_ajustado > 0:
+                estado_control = "DEMORA > 6 MESES"
+                accion = "Resolver con otro proveedor o cambiar modalidad"
+            elif pendiente_ajustado <= 0:
+                estado_control = "CUBIERTO / SACAR DEL BACK ORDER"
+                accion = "No pedir ahora: stock/venta actual ya no lo justifica"
+            elif via_actual != str(linea.get("via", "")):
+                estado_control = "CAMBIAR MODALIDAD"
+                accion = f"Antes {linea.get('via', '')}; ahora {via_actual}"
+            else:
+                estado_control = "MANTENER BACK ORDER"
+                accion = "Mantener pedido pendiente"
+            filas.append(
+                {
+                    "Pedido": pedido.get("pedido_id", ""),
+                    "Fecha pedido": fecha_txt,
+                    "Dias pendiente": dias,
+                    "Estado control": estado_control,
+                    "Accion": accion,
+                    "Codigo normalizado": codigo,
+                    "Articulo": linea.get("articulo", ""),
+                    "Descripcion": linea.get("descripcion", ""),
+                    "Via original": linea.get("via", ""),
+                    "Via actual": via_actual,
+                    "Cantidad pedida": linea.get("cantidad_pedida", 0),
+                    "Pendiente manual": pendiente_manual,
+                    "Pendiente segun JIT": pendiente_ajustado,
+                    "Stock fisico": cur.get("Stock fisico", 0),
+                    "Venta mensual": cur.get("Venta mensual", 0),
+                    "Cobertura dias": cur.get("Cobertura dias", ""),
+                    "Motivo actual": cur.get("Motivo", ""),
+                    "Observaciones": linea.get("observaciones", pedido.get("observaciones", "")),
+                }
+            )
+    return pd.DataFrame(filas, columns=columnas)
 
 
 def mostrar_salidas_polo(df: pd.DataFrame) -> pd.DataFrame:
@@ -2944,6 +3357,22 @@ def leer_base_polo_anterior(file_bytes: bytes, filename: str) -> Tuple[pd.DataFr
     ubicaciones = read_sheet("UBICACION_POLO_LOGISTICO")
     historial = read_sheet("HISTORIAL_MUDANZAS")
     detalle = read_sheet("DETALLE_MUDANZA")
+    recepcion = read_sheet("RECEPCION_POLO")
+    if not detalle.empty and not recepcion.empty and len(detalle) == len(recepcion):
+        for col in [
+            "Piezas recibidas",
+            "OK recepcion",
+            "OK recepción",
+            "Ubicacion informada",
+            "Ubicación informada",
+            "Receptor",
+            "Fecha recepcion",
+            "Fecha recepción",
+            "Observaciones recepcion",
+            "Observaciones recepción",
+        ]:
+            if col in recepcion.columns and col not in detalle.columns:
+                detalle[col] = recepcion[col].values
     return stock_polo, ubicaciones, historial, detalle
 
 
@@ -2953,8 +3382,10 @@ def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
 
     col_map = {
         "Fecha/Hora": "fecha_hora",
+        "Depósito origen": "deposito_origen",
         "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito origen": "deposito_origen",
         "Deposito origen": "deposito_origen",
+        "Depósito destino": "deposito_destino",
         "DepÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³sito destino": "deposito_destino",
         "Deposito destino": "deposito_destino",
         "Pallet": "pallet",
@@ -2971,19 +3402,33 @@ def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
         "Cantidades por bulto": "cantidades_bulto",
         "UbicaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n": "ubicacion",
         "Ubicacion": "ubicacion",
+        "Ubicación": "ubicacion",
         "Lectura scanner": "lectura_scanner",
         "ArtÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­culo": "articulo",
         "Articulo": "articulo",
+        "Artículo": "articulo",
         "DescripciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n": "descripcion",
         "Descripcion": "descripcion",
+        "Descripción": "descripcion",
         "Unidad": "unidad",
         "Piezas enviadas": "cantidad_mudada",
+        "Piezas recibidas": "cantidad_recibida",
         "Cantidad mudada": "cantidad_mudada",
         "Stock original Darkinel": "stock_total",
         "Stock restante Darkinel": "stock_restante_darkinel",
         "CÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo normalizado": "codigo_normalizado",
         "Codigo normalizado": "codigo_normalizado",
+        "Código normalizado": "codigo_normalizado",
         "Observaciones": "observaciones",
+        "OK recepcion": "recepcion_ok",
+        "OK recepción": "recepcion_ok",
+        "Ubicacion informada": "ubicacion_recepcion",
+        "Ubicación informada": "ubicacion_recepcion",
+        "Receptor": "receptor",
+        "Fecha recepcion": "fecha_recepcion",
+        "Fecha recepción": "fecha_recepcion",
+        "Observaciones recepcion": "observaciones_recepcion",
+        "Observaciones recepción": "observaciones_recepcion",
     }
     normalizados = {normalizar_codigo(k): v for k, v in col_map.items()}
     salida = pd.DataFrame()
@@ -2995,6 +3440,13 @@ def detalle_excel_a_pick_items(detalle: pd.DataFrame) -> pd.DataFrame:
         return salida
     salida["item_id"] = range(1, len(salida) + 1)
     return normalizar_df_pick(salida)
+
+
+def pallets_unicos_df(df: pd.DataFrame) -> set[int]:
+    if df is None or df.empty or "pallet" not in df.columns:
+        return set()
+    pallets = pd.to_numeric(df["pallet"], errors="coerce").dropna().astype(int)
+    return set(p for p in pallets.tolist() if p > 0)
 
 
 def es_ubicacion_real(valor) -> bool:
@@ -3947,10 +4399,11 @@ st.caption(
 with st.sidebar:
     st.header("Base de stock")
     if nube_disponible():
-        st.success("Base en nube conectada")
+        st.success("PostgreSQL local conectado")
     else:
-        st.warning("Sin nube: guardado local SQLite")
-        st.caption("Para compartir datos entre usuarios en Streamlit Cloud, configura Supabase en Secrets.")
+        st.error("PostgreSQL local no conectado")
+        if st.session_state.get("ultimo_error_db"):
+            st.caption(st.session_state["ultimo_error_db"])
     uploaded = st.file_uploader("Subi el archivo de stock de DARKINEL", type=["xls", "xlsx", "xlsm", "csv"])
 
     stock_guardado_sidebar = cargar_archivo_estado("stock_darkinel_actual")
@@ -4132,12 +4585,14 @@ if uploaded_frecuencia is not None:
         frecuencia_filename = uploaded_frecuencia.name
         guardar_archivo_si_cambio("frecuencia_ventas_actual", frecuencia_filename, frecuencia_bytes)
         frecuencias_df = leer_frecuencias(frecuencia_bytes, frecuencia_filename)
+        ventas_detalle_df = leer_ventas_mensuales_detalle(frecuencia_bytes, frecuencia_filename)
         if frecuencias_df.empty:
             st.sidebar.warning("No pude leer codigos/frecuencia del archivo de frecuencia.")
         else:
             st.sidebar.success(f"Frecuencias cargadas: {len(frecuencias_df)} codigos")
     except Exception as e:
         frecuencias_df = pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+        ventas_detalle_df = pd.DataFrame(columns=["codigo_normalizado", "descripcion_venta", "fecha_venta", "unidades_vendidas"])
         st.sidebar.error("No pude leer el archivo de frecuencia.")
         st.sidebar.exception(e)
 elif frecuencia_guardada and usar_frecuencia_guardada:
@@ -4145,16 +4600,19 @@ elif frecuencia_guardada and usar_frecuencia_guardada:
         frecuencia_bytes = frecuencia_guardada["contenido"]
         frecuencia_filename = frecuencia_guardada.get("nombre", "ventas_guardadas.xlsx")
         frecuencias_df = leer_frecuencias(frecuencia_bytes, frecuencia_filename)
+        ventas_detalle_df = leer_ventas_mensuales_detalle(frecuencia_bytes, frecuencia_filename)
         if frecuencias_df.empty:
             st.sidebar.warning("No pude leer codigos/frecuencia de las ventas guardadas.")
         else:
             st.sidebar.info(f"Usando ventas guardadas: {frecuencia_filename}")
     except Exception as e:
         frecuencias_df = pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+        ventas_detalle_df = pd.DataFrame(columns=["codigo_normalizado", "descripcion_venta", "fecha_venta", "unidades_vendidas"])
         st.sidebar.error("No pude leer las ventas guardadas.")
         st.sidebar.exception(e)
 else:
     frecuencias_df = pd.DataFrame(columns=["codigo_normalizado", "frecuencia", "meses_venta"])
+    ventas_detalle_df = pd.DataFrame(columns=["codigo_normalizado", "descripcion_venta", "fecha_venta", "unidades_vendidas"])
 
 polo_guardado = cargar_archivo_estado("control_polo_actual")
 if uploaded_polo is not None:
@@ -4182,6 +4640,8 @@ else:
 
 df_pick = pick_items_df()
 df_reimpresion = detalle_excel_a_pick_items(detalle_mudanza_anterior)
+palets_pick = pallets_unicos_df(df_pick)
+palets_reimpresion = pallets_unicos_df(df_reimpresion)
 if uploaded_polo is not None and df_reimpresion.empty:
     st.error(
         "El archivo cargado como control Polo no tiene detalle de mudanza legible. "
@@ -4193,9 +4653,17 @@ if df_pick.empty and df_reimpresion.empty:
         "El stock diario de Nodum solo actualiza cantidades, pero no trae pallets ni ubicaciones. "
         "Carga el control de ayer en Base Polo anterior o restaura un backup desde Administracion."
     )
-df_operativo = df_pick if not df_pick.empty else df_reimpresion
-usando_control_anterior = df_pick.empty and not df_reimpresion.empty
-mudanza_activa_es_control_anterior = misma_mudanza(df_pick, df_reimpresion)
+control_anterior_mas_completo = (
+    not df_reimpresion.empty
+    and not df_pick.empty
+    and (
+        len(palets_reimpresion) > len(palets_pick)
+        or len(df_reimpresion) > len(df_pick)
+    )
+)
+df_operativo = df_reimpresion if (df_pick.empty or control_anterior_mas_completo) else df_pick
+usando_control_anterior = (df_pick.empty or control_anterior_mas_completo) and not df_reimpresion.empty
+mudanza_activa_es_control_anterior = False if control_anterior_mas_completo else misma_mudanza(df_pick, df_reimpresion)
 ubicaciones_operativas = pd.DataFrame() if usando_control_anterior or mudanza_activa_es_control_anterior else ubicaciones_anteriores
 estado_salidas_polo_runtime = cargar_salidas_polo_db()
 if estado_salidas_polo_runtime:
@@ -4274,7 +4742,15 @@ sku_diferencia_metric = sku_fisico_metric - sku_nodum_metric
 sku_anexado_metric = len((sku_polo_set | sku_darkinel_set) - sku_nodum_set)
 
 if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not df_reimpresion.empty:
-    st.info(f"El control anterior cargado trae {len(df_reimpresion)} lineas de mudanza.")
+    st.info(
+        f"El control anterior cargado trae {len(df_reimpresion)} lineas y "
+        f"{len(palets_reimpresion)} pallets de mudanza."
+    )
+    if control_anterior_mas_completo:
+        st.warning(
+            f"La mudanza activa guardada tiene {len(df_pick)} lineas y {len(palets_pick)} pallets. "
+            "Por eso estoy mostrando el control anterior cargado. Para seguir trabajando y guardar recepciones, reemplaza la mudanza activa con este control."
+        )
     if df_pick.empty:
         if st.button("Usar control anterior como mudanza activa", type="primary"):
             guardar_backup_mudanza("antes de usar control anterior")
@@ -4284,7 +4760,8 @@ if (uploaded_polo is not None or (polo_guardado and usar_polo_guardado)) and not
             st.success("Mudanza cargada desde el control anterior.")
             st.rerun()
     else:
-        if st.button("Reemplazar mudanza actual por control anterior"):
+        tipo_boton_reemplazar = "primary" if control_anterior_mas_completo else "secondary"
+        if st.button("Reemplazar mudanza actual por control anterior", type=tipo_boton_reemplazar):
             guardar_backup_mudanza("antes de reemplazar por control anterior")
             st.session_state.pick_items = df_reimpresion.to_dict("records")
             st.session_state.pick_seq = int(pd.to_numeric(df_reimpresion["item_id"], errors="coerce").fillna(0).max())
@@ -4325,8 +4802,16 @@ else:
 
 st.markdown("---")
 
-tab_buscar, tab_pallets, tab_recepcion, tab_salidas, tab_bases, tab_stock = st.tabs(
-    ["1) Buscar y pickear", "2) Pallets / mudanza", "3) Recepcion Polo", "4) Salidas Polo", "5) Bases actualizadas", "6) Consulta stock"]
+tab_buscar, tab_pallets, tab_recepcion, tab_salidas, tab_bases, tab_stock, tab_pedidos = st.tabs(
+    [
+        "1) Buscar y pickear",
+        "2) Pallets / mudanza",
+        "3) Recepcion Polo",
+        "4) Salidas Polo",
+        "5) Bases actualizadas",
+        "6) Consulta stock",
+        "7) Pedidos",
+    ]
 )
 
 with tab_buscar:
@@ -4964,6 +5449,10 @@ with tab_recepcion:
         st.caption("Selecciona el pallet, informa una ubicacion unica y desmarca solamente lo que tenga problema. Si hay algo desmarcado, ese pallet no se guarda.")
         trabajo_recepcion = normalizar_df_pick(df_operativo)
         pallets_recepcion = sorted(pd.to_numeric(trabajo_recepcion["pallet"], errors="coerce").dropna().astype(int).unique().tolist())
+        st.caption(
+            f"{len(pallets_recepcion)} pallets disponibles para recibir "
+            f"({len(trabajo_recepcion)} lineas de detalle cargadas)."
+        )
         pr1, pr2, pr3 = st.columns([1, 1.5, 1.5])
         pallet_recepcion = pr1.selectbox("Pallet a recibir", pallets_recepcion)
         lineas_pallet_recepcion = trabajo_recepcion[trabajo_recepcion["pallet"] == int(pallet_recepcion)].copy()
@@ -5701,3 +6190,220 @@ with tab_stock:
         st.dataframe(limpiar_df_visible(mostrar_inventario(inventario_consulta.head(100))), use_container_width=True, hide_index=True)
 
     st.caption("Frecuencia: A = 0 a 6 meses, B = 6,1 a 12, C = 12,1 a 18, E = 18,1 a 24, F = 24,1 a 38, Scrap = mas de 38 meses.")
+
+
+with tab_pedidos:
+    st.subheader("Sugerencia de pedidos")
+    st.caption("Cruza venta mensual, stock fisico y demora estimada: maritimo 6 meses, aereo 35 dias y aereo VOR 20 dias.")
+
+    p_cfg1, p_cfg2, p_cfg3, p_cfg4 = st.columns([1, 1, 1, 1])
+    meses_promedio_pedido = p_cfg1.number_input("Promedio venta ultimos meses", min_value=1, max_value=24, value=6, step=1)
+    cobertura_extra_pedido = p_cfg2.number_input("Cobertura extra al llegar", min_value=0.0, max_value=12.0, value=0.5, step=0.5)
+    solo_con_pedido = p_cfg3.checkbox("Mostrar solo sugeridos", value=True)
+    incluir_sin_venta_pedido = p_cfg4.checkbox("Incluir sin venta mensual", value=False)
+
+    pedidos_df = preparar_sugerencia_pedidos(
+        balance_actual,
+        frecuencias_df,
+        ventas_detalle_df,
+        int(meses_promedio_pedido),
+        float(cobertura_extra_pedido),
+        incluir_sin_venta=incluir_sin_venta_pedido,
+    )
+    pedidos_df = aplicar_reglas_usuario_pedidos(pedidos_df)
+    if solo_con_pedido and not pedidos_df.empty:
+        pedidos_vista = pedidos_df[pedidos_df["Cantidad sugerida"] > 0].copy()
+    else:
+        pedidos_vista = pedidos_df.copy()
+
+    total_sugerido = int(pd.to_numeric(pedidos_vista.get("Cantidad sugerida", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not pedidos_vista.empty else 0
+    por_via = pedidos_vista.groupby("Via sugerida")["Cantidad sugerida"].sum().to_dict() if not pedidos_vista.empty else {}
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Codigos a revisar", f"{len(pedidos_vista):,}".replace(",", "."))
+    m2.metric("Piezas sugeridas", f"{total_sugerido:,}".replace(",", "."))
+    m3.metric("Maritimo", f"{int(por_via.get('MARITIMO 6 meses', 0)):,}".replace(",", "."))
+    m4.metric("Aereos/VOR", f"{int(por_via.get('AEREO 35 dias', 0) + por_via.get('AEREO VOR 20 dias', 0)):,}".replace(",", "."))
+
+    filtro_via = st.multiselect(
+        "Filtrar via",
+        [
+            "AEREO VOR 20 dias",
+            "AEREO 35 dias",
+            "MARITIMO 6 meses",
+            "OFERTA / NO PEDIR",
+            "RETIRAR GONDOLA",
+            "STOCK MUERTO / SCRAP",
+            "NO PEDIR",
+        ],
+        default=["AEREO VOR 20 dias", "AEREO 35 dias", "MARITIMO 6 meses"] if solo_con_pedido else [],
+    )
+    if filtro_via:
+        pedidos_vista = pedidos_vista[pedidos_vista["Via sugerida"].isin(filtro_via)].copy()
+
+    busqueda_pedido = st.text_input("Buscar codigo o descripcion", placeholder="Ej: filtro aceite / B6Y1")
+    if busqueda_pedido and not pedidos_vista.empty:
+        termino = str(busqueda_pedido).strip().upper()
+        pedidos_vista = pedidos_vista[
+            pedidos_vista["Codigo normalizado"].astype(str).str.upper().str.contains(termino, na=False)
+            | pedidos_vista["Articulo"].astype(str).str.upper().str.contains(termino, na=False)
+            | pedidos_vista["Descripcion"].astype(str).str.upper().str.contains(termino, na=False)
+        ].copy()
+
+    if ventas_detalle_df.empty:
+        st.warning("No hay venta mensual legible cargada. Carga o usa el archivo de ventas en la barra lateral para calcular pedidos.")
+    elif pedidos_vista.empty:
+        st.info("No hay sugerencias con los filtros actuales.")
+    else:
+        columnas_pedidos = [
+            "Via sugerida", "Politica JIT", "Codigo normalizado", "Articulo", "Descripcion", "Frecuencia", "Meses sin venta",
+            "Venta mensual", "Stock fisico", "Stock Darkinel", "Stock Polo", "Cobertura meses",
+            "Cantidad sugerida", "Objetivo stock", "Pedido maritimo 6 meses",
+            "Pedido aereo 35 dias", "Pedido VOR 20 dias", "Motivo",
+        ]
+        st.dataframe(limpiar_df_visible(pedidos_vista[columnas_pedidos]), use_container_width=True, hide_index=True)
+
+        buffer_pedidos = io.BytesIO()
+        with pd.ExcelWriter(buffer_pedidos, engine="openpyxl") as writer:
+            limpiar_df_visible(pedidos_vista[columnas_pedidos]).to_excel(writer, index=False, sheet_name="PEDIDOS_SUGERIDOS")
+            limpiar_df_visible(pedidos_df).to_excel(writer, index=False, sheet_name="CALCULO_COMPLETO")
+        st.download_button(
+            "Descargar sugerencia de pedidos Excel",
+            data=buffer_pedidos.getvalue(),
+            file_name=f"pedidos_sugeridos_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        st.markdown("**Pedido para enviar por mail**")
+        order_default = st.text_input("ORDER por defecto", value="HC1EA", key="order_default_mail")
+        pedido_mail_base = pedidos_vista[pedidos_vista["Cantidad sugerida"] > 0].copy()
+        pedido_editor_base = pd.DataFrame(
+            {
+                "ORDER": str(order_default).strip().upper() or "HC1EA",
+                "CODE": pedido_mail_base["Articulo"].where(
+                    pedido_mail_base["Articulo"].astype(str).str.strip().ne(""),
+                    pedido_mail_base["Codigo normalizado"],
+                ).astype(str).str.strip().str.upper(),
+                "QTY": pd.to_numeric(pedido_mail_base["Cantidad sugerida"], errors="coerce").fillna(0),
+                "Codigo normalizado": pedido_mail_base["Codigo normalizado"].astype(str),
+                "Descripcion": pedido_mail_base["Descripcion"].astype(str),
+                "Via": pedido_mail_base["Via sugerida"].astype(str),
+                "Decision usuario": pedido_mail_base.get("Decision usuario", "").astype(str) if "Decision usuario" in pedido_mail_base.columns else "",
+                "Comentario usuario": pedido_mail_base.get("Comentario usuario", "").astype(str) if "Comentario usuario" in pedido_mail_base.columns else "",
+            }
+        )
+        pedido_editor = st.data_editor(
+            pedido_editor_base,
+            use_container_width=True,
+            hide_index=True,
+            disabled=["CODE", "Codigo normalizado", "Descripcion", "Via"],
+            column_config={
+                "QTY": st.column_config.NumberColumn("QTY", min_value=0.0, step=1.0),
+                "Decision usuario": st.column_config.SelectboxColumn(
+                    "Decision usuario",
+                    options=["", "NO PEDIR ESTA VEZ", "NO PEDIR MAS", "PEDIDO ESPECIAL", "ESTACIONAL/ZAFRAL", "OFERTA PUNTUAL"],
+                ),
+                "Comentario usuario": st.column_config.TextColumn("Comentario usuario"),
+            },
+            key="pedido_mail_editor",
+        )
+
+        st.markdown("**Agregar codigo manual al pedido**")
+        if "pedido_manual_rows" not in st.session_state:
+            st.session_state.pedido_manual_rows = []
+        man1, man2, man3 = st.columns([1, 1.5, 1])
+        manual_order = man1.text_input("ORDER manual", value=str(order_default).strip().upper() or "HC1EA", key="manual_order_pedido")
+        manual_code = man2.text_input("CODE manual nuevo", placeholder="Codigo que no esta en la base", key="manual_code_pedido")
+        manual_qty = man3.number_input("QTY manual", min_value=0.0, value=0.0, step=1.0, key="manual_qty_pedido")
+        manual_comment = st.text_input("Comentario manual", placeholder="Motivo / proveedor / referencia", key="manual_comment_pedido")
+        if st.button("Agregar codigo manual"):
+            if not str(manual_code).strip():
+                st.error("Ingresa el CODE manual.")
+            elif float(manual_qty or 0) <= 0:
+                st.error("La cantidad manual tiene que ser mayor a cero.")
+            else:
+                st.session_state.pedido_manual_rows.append(
+                    {
+                        "ORDER": str(manual_order).strip().upper() or "HC1EA",
+                        "CODE": str(manual_code).strip().upper(),
+                        "QTY": float(manual_qty),
+                        "Comentario": str(manual_comment).strip(),
+                    }
+                )
+                st.success("Codigo manual agregado al pedido.")
+                st.rerun()
+        if st.session_state.pedido_manual_rows:
+            st.dataframe(pd.DataFrame(st.session_state.pedido_manual_rows), use_container_width=True, hide_index=True)
+            if st.button("Vaciar codigos manuales"):
+                st.session_state.pedido_manual_rows = []
+                st.rerun()
+
+        if st.button("Guardar decisiones y comentarios del pedido"):
+            guardar_aprendizaje_pedido(pedido_editor)
+            st.success("Decisiones guardadas. Se van a aplicar en proximas sugerencias.")
+            st.rerun()
+
+        st.download_button(
+            "Descargar Excel pedido para mail",
+            data=armar_excel_pedido_mail(pedido_editor, st.session_state.get("pedido_manual_rows", [])),
+            file_name=f"pedido_mail_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        st.markdown("**Crear back order**")
+        obs_backorder = st.text_input("Observaciones del pedido", placeholder="Proveedor / marca / comentario", key="obs_backorder_pedido")
+        if st.button("Guardar sugerencia filtrada como back order", type="primary"):
+            nuevo_estado = crear_backorder_desde_sugerencia(pedidos_vista, obs_backorder)
+            lineas_guardadas = sum(len(p.get("lineas", [])) for p in nuevo_estado.get("pedidos", [])[-1:])
+            st.success(f"Back order guardado con {lineas_guardadas} linea(s). Se recalculara contra el stock diario.")
+            st.rerun()
+
+    st.markdown("---")
+    st.subheader("Back order activo")
+    estado_backorders = cargar_backorders_db()
+    backorder_control = evaluar_backorders(estado_backorders, pedidos_df)
+    if backorder_control.empty:
+        st.info("Todavia no hay back order guardado.")
+    else:
+        pendientes_reales = int(pd.to_numeric(backorder_control["Pendiente segun JIT"], errors="coerce").fillna(0).sum())
+        demorados = int(backorder_control["Estado control"].eq("DEMORA > 6 MESES").sum())
+        cubiertos = int(backorder_control["Estado control"].eq("CUBIERTO / SACAR DEL BACK ORDER").sum())
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Lineas back order", f"{len(backorder_control):,}".replace(",", "."))
+        b2.metric("Pendiente segun JIT", f"{pendientes_reales:,}".replace(",", "."))
+        b3.metric("Alertas > 6 meses", f"{demorados:,}".replace(",", "."))
+        if cubiertos:
+            st.warning(f"{cubiertos} linea(s) ya no deberian seguir en back order segun stock/venta actual.")
+        if demorados:
+            st.error("Hay pedidos con mas de 6 meses pendientes: resolver con otro proveedor o cambiar modalidad.")
+        st.dataframe(limpiar_df_visible(backorder_control), use_container_width=True, hide_index=True)
+
+        buffer_backorder = io.BytesIO()
+        with pd.ExcelWriter(buffer_backorder, engine="openpyxl") as writer:
+            limpiar_df_visible(backorder_control).to_excel(writer, index=False, sheet_name="BACK_ORDER_CONTROL")
+        st.download_button(
+            "Descargar control de back order Excel",
+            data=buffer_backorder.getvalue(),
+            file_name=f"back_order_control_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        if st.button("Actualizar back order: sacar cubiertos del calculo"):
+            codigos_cubiertos = set(
+                backorder_control.loc[
+                    backorder_control["Estado control"].eq("CUBIERTO / SACAR DEL BACK ORDER"),
+                    "Codigo normalizado",
+                ].map(normalizar_codigo)
+            )
+            if codigos_cubiertos:
+                estado_actualizado = cargar_backorders_db()
+                for pedido in estado_actualizado.get("pedidos", []):
+                    for linea in pedido.get("lineas", []):
+                        if normalizar_codigo(linea.get("codigo_normalizado", "")) in codigos_cubiertos:
+                            linea["cantidad_pendiente_manual"] = 0
+                            linea["estado"] = "CUBIERTO POR STOCK/JIT"
+                guardar_backorders_db(estado_actualizado)
+                st.success(f"Se marcaron {len(codigos_cubiertos)} codigo(s) como cubiertos.")
+                st.rerun()
+
+    st.caption("Politica JIT: mas de 18 meses sin venta va a oferta; mas de 24 meses no se repone y se retira de gondola; mas de 40 meses va a stock muerto/scrap.")
+    st.caption("Regla de reposicion: si el stock no cubre 20 dias sugiere VOR; si no cubre 35 dias sugiere aereo; si no cubre maritimo + cobertura extra sugiere maritimo.")
