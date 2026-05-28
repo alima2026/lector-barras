@@ -4699,6 +4699,7 @@ if estado_salidas_darkinel_runtime:
     )
 salidas_polo_actual = salidas_polo_df()
 salidas_darkinel_actual = salidas_darkinel_df()
+balance_actual = balance_darkinel_polo(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
 stock_darkinel_metric = stock_darkinel_actualizado(stock_consolidado, df_operativo)
 stock_polo_metric = stock_polo_actualizado(df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
 stock_darkinel_metric_visible = limpiar_df_visible(stock_darkinel_metric)
@@ -4802,19 +4803,18 @@ else:
 
 st.markdown("---")
 
-tab_buscar, tab_pallets, tab_recepcion, tab_salidas, tab_bases, tab_stock, tab_pedidos = st.tabs(
-    [
-        "1) Buscar y pickear",
-        "2) Pallets / mudanza",
-        "3) Recepcion Polo",
-        "4) Salidas Polo",
-        "5) Bases actualizadas",
-        "6) Consulta stock",
-        "7) Pedidos",
-    ]
-)
+modulos_app = [
+    "1) Buscar y pickear",
+    "2) Pallets / mudanza",
+    "3) Recepcion Polo",
+    "4) Salidas Polo",
+    "5) Bases actualizadas",
+    "6) Consulta stock",
+    "7) Pedidos",
+]
+seccion_activa = st.radio("Modulo", modulos_app, horizontal=True, label_visibility="collapsed")
 
-with tab_buscar:
+if seccion_activa == "1) Buscar y pickear":
     modo = st.radio("Modo de busqueda", ["Un codigo", "Varios codigos"], horizontal=True)
 
     if modo == "Un codigo":
@@ -5031,7 +5031,7 @@ with tab_buscar:
                 pendientes_key="lecturas_manual_pendientes",
             )
 
-with tab_pallets:
+elif seccion_activa == "2) Pallets / mudanza":
     st.subheader("Control de pallets hechos")
     pallets_actuales = set(pd.to_numeric(df_operativo.get("pallet", pd.Series(dtype=float)), errors="coerce").dropna().astype(int).tolist()) if not df_operativo.empty else set()
     if 0 in pallets_actuales:
@@ -5439,7 +5439,7 @@ with tab_pallets:
             st.success("Lineas quitadas.")
             st.rerun()
 
-with tab_recepcion:
+elif seccion_activa == "3) Recepcion Polo":
     st.subheader("Recepcion en Polo")
     if df_operativo.empty:
         st.info("Todavia no hay articulos en la mudanza para recibir.")
@@ -5559,7 +5559,7 @@ with tab_recepcion:
             r2.metric("Lineas pendientes", pendientes)
             r3.metric("Diferencias cantidad", diferencias)
 
-with tab_salidas:
+elif seccion_activa == "4) Salidas Polo":
     st.subheader("Salidas / ventas desde Polo")
     ubicaciones_disponibles = aplicar_salidas_a_ubicaciones(ubicacion_polo_logistico(df_operativo, ubicaciones_operativas), salidas_polo_actual)
     if ubicaciones_disponibles.empty:
@@ -5709,7 +5709,7 @@ with tab_salidas:
         )
     st.dataframe(limpiar_df_visible(mostrar_salidas_polo(salidas_historial)), use_container_width=True, hide_index=True)
 
-with tab_bases:
+elif seccion_activa == "5) Bases actualizadas":
     st.subheader("BALANCE_DARKINEL_POLO")
     balance_actual = balance_darkinel_polo(stock_consolidado, df_operativo, stock_polo_anterior, ubicaciones_operativas, salidas_polo_actual)
     st.caption("Balance por codigo: Stock Nodum del dia contra lo real contado: piezas disponibles en Polo + conteo fisico en Darkinel. La diferencia genera alta o baja sugerida.")
@@ -6157,7 +6157,7 @@ with tab_bases:
     st.subheader("SALIDAS_DARKINEL")
     st.dataframe(limpiar_df_visible(mostrar_salidas_polo(salidas_darkinel_actual)), use_container_width=True, hide_index=True)
 
-with tab_stock:
+elif seccion_activa == "6) Consulta stock":
     st.subheader("Consulta de stock por codigo")
     inventario_consulta = inventario_para_buscar(stock_consolidado, df_operativo, ubicaciones_operativas, frecuencias_df, salidas_polo_actual)
     inventario_consulta = aplicar_salidas_a_inventario(inventario_consulta, salidas_darkinel_actual, "DARKINEL")
@@ -6192,7 +6192,7 @@ with tab_stock:
     st.caption("Frecuencia: A = 0 a 6 meses, B = 6,1 a 12, C = 12,1 a 18, E = 18,1 a 24, F = 24,1 a 38, Scrap = mas de 38 meses.")
 
 
-with tab_pedidos:
+elif seccion_activa == "7) Pedidos":
     st.subheader("Sugerencia de pedidos")
     st.caption("Cruza venta mensual, stock fisico y demora estimada: maritimo 6 meses, aereo 35 dias y aereo VOR 20 dias.")
 
