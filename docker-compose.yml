@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: deposito_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-deposito}
+      POSTGRES_USER: ${POSTGRES_USER:-deposito_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deposito_pass_cambiar}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - deposito_pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deposito_user} -d ${POSTGRES_DB:-deposito}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  deposito_pgdata:
+
