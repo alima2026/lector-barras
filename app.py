@@ -627,6 +627,45 @@ def normalizar_codigo(valor) -> str:
     return re.sub(r"[^A-Z0-9]", "", texto)
 
 
+def texto_original_codigo(*valores) -> str:
+    partes = []
+    for valor in valores:
+        if valor is None:
+            continue
+        try:
+            if pd.isna(valor):
+                continue
+        except Exception:
+            pass
+        texto = str(valor).strip()
+        if texto:
+            partes.append(texto)
+    return " ".join(partes)
+
+
+def clasificar_marca_codigo(articulo="", codigo_normalizado="", descripcion="") -> str:
+    """Separa fabrica por formato del codigo. Mazda mantiene guiones; Kia queda sin guiones."""
+    texto = texto_original_codigo(articulo, codigo_normalizado, descripcion).upper()
+    articulo_txt = texto_original_codigo(articulo).upper()
+    if "-" in articulo_txt:
+        return "MAZDA"
+    if "-" in texto:
+        return "MAZDA"
+    codigo = normalizar_codigo(codigo_normalizado or articulo)
+    if codigo:
+        return "KIA"
+    return "SIN MARCA"
+
+
+def codigo_para_pedido_mail(marca: str, articulo="", codigo_normalizado="") -> str:
+    marca = str(marca or "").strip().upper()
+    articulo_txt = str(articulo or "").strip().upper()
+    codigo_norm = normalizar_codigo(codigo_normalizado or articulo_txt)
+    if marca == "MAZDA" and "-" in articulo_txt:
+        return articulo_txt
+    return codigo_norm or articulo_txt
+
+
 def normalizar_locacion(valor) -> str:
     if pd.isna(valor):
         return ""
@@ -1802,10 +1841,11 @@ def preparar_sugerencia_pedidos(
     meses_promedio: int,
     cobertura_extra_meses: float,
     incluir_sin_venta: bool = False,
+    pedidos_pendientes: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     columnas = [
-        "Codigo normalizado", "Articulo", "Descripcion", "Frecuencia", "Meses sin venta", "Politica JIT", "Venta mensual",
-        "Stock fisico", "Stock Darkinel", "Stock Polo", "Cobertura meses", "Cobertura dias",
+        "Marca", "Codigo normalizado", "Articulo", "Descripcion", "Frecuencia", "Meses sin venta", "Politica JIT", "Venta mensual",
+        "Stock fisico", "Stock Darkinel", "Stock Polo", "Pedido pendiente", "Stock proyectado", "Cobertura meses", "Cobertura dias",
         "Via sugerida", "Cantidad sugerida", "Objetivo stock", "Llegada estimada dias",
         "Pedido maritimo 6 meses", "Pedido aereo 35 dias", "Pedido VOR 20 dias", "Motivo",
     ]
@@ -1818,6 +1858,21 @@ def preparar_sugerencia_pedidos(
     base["Stock Darkinel"] = pd.to_numeric(base.get("Conteo fisico Darkinel", pd.NA), errors="coerce")
     base["Stock Darkinel"] = base["Stock Darkinel"].fillna(pd.to_numeric(base.get("Restante esperado Darkinel", 0), errors="coerce").fillna(0))
     base["Stock fisico"] = base["Stock Darkinel"] + base["Stock Polo"]
+    base["Marca"] = base.apply(
+        lambda r: clasificar_marca_codigo(r.get("Articulo", ""), r.get("Codigo normalizado", ""), r.get("Descripcion", "")),
+        axis=1,
+    )
+
+    if pedidos_pendientes is not None and not pedidos_pendientes.empty:
+        pendientes = pedidos_pendientes.copy()
+        pendientes["Codigo normalizado"] = pendientes["Codigo normalizado"].map(normalizar_codigo)
+        pendientes["Pedido pendiente"] = pd.to_numeric(pendientes.get("Pedido pendiente", 0), errors="coerce").fillna(0)
+        pendientes = pendientes[["Codigo normalizado", "Pedido pendiente"]].groupby("Codigo normalizado", as_index=False).sum()
+        base = base.merge(pendientes, on="Codigo normalizado", how="left")
+    else:
+        base["Pedido pendiente"] = 0
+    base["Pedido pendiente"] = pd.to_numeric(base.get("Pedido pendiente", 0), errors="coerce").fillna(0)
+    base["Stock proyectado"] = base["Stock fisico"] + base["Pedido pendiente"]
 
     ventas_resumen = resumen_ventas_para_pedidos(ventas_detalle, meses_promedio)
     if not ventas_resumen.empty:
@@ -1840,7 +1895,7 @@ def preparar_sugerencia_pedidos(
     lead_vor = 20 / 30
     extra = max(float(cobertura_extra_meses or 0), 0)
     demanda = base["Venta mensual"]
-    stock = base["Stock fisico"]
+    stock = base["Stock proyectado"]
     base["Cobertura meses"] = stock.where(demanda <= 0, stock / demanda.replace(0, pd.NA))
     base["Cobertura dias"] = base["Cobertura meses"] * 30
     base["Pedido maritimo 6 meses"] = ((demanda * (lead_maritimo + extra)) - stock).clip(lower=0).apply(math.ceil)
@@ -1862,19 +1917,19 @@ def preparar_sugerencia_pedidos(
     base.loc[urgente_vor, "Cantidad sugerida"] = base.loc[urgente_vor, "Pedido VOR 20 dias"]
     base.loc[urgente_vor, "Objetivo stock"] = (demanda.loc[urgente_vor] * (lead_vor + extra)).apply(math.ceil)
     base.loc[urgente_vor, "Llegada estimada dias"] = 20
-    base.loc[urgente_vor, "Motivo"] = "Stock no cubre 20 dias"
+    base.loc[urgente_vor, "Motivo"] = "Stock fisico + pedido pendiente no cubre 20 dias"
 
     base.loc[urgente_aereo, "Via sugerida"] = "AEREO 35 dias"
     base.loc[urgente_aereo, "Cantidad sugerida"] = base.loc[urgente_aereo, "Pedido aereo 35 dias"]
     base.loc[urgente_aereo, "Objetivo stock"] = (demanda.loc[urgente_aereo] * (lead_aereo + extra)).apply(math.ceil)
     base.loc[urgente_aereo, "Llegada estimada dias"] = 35
-    base.loc[urgente_aereo, "Motivo"] = "Stock no cubre 35 dias"
+    base.loc[urgente_aereo, "Motivo"] = "Stock fisico + pedido pendiente no cubre 35 dias"
 
     base.loc[maritimo, "Via sugerida"] = "MARITIMO 6 meses"
     base.loc[maritimo, "Cantidad sugerida"] = base.loc[maritimo, "Pedido maritimo 6 meses"]
     base.loc[maritimo, "Objetivo stock"] = (demanda.loc[maritimo] * (lead_maritimo + extra)).apply(math.ceil)
     base.loc[maritimo, "Llegada estimada dias"] = 180
-    base.loc[maritimo, "Motivo"] = "Reponer para cubrir lead time maritimo"
+    base.loc[maritimo, "Motivo"] = "Reponer para cubrir lead time maritimo considerando pedidos pendientes"
     base.loc[con_venta & ~(urgente_vor | urgente_aereo | maritimo), "Motivo"] = "Stock cubre el plazo configurado"
 
     meses_sin_venta = pd.to_numeric(base["Meses sin venta"], errors="coerce")
@@ -1974,10 +2029,14 @@ def guardar_aprendizaje_pedido(editor: pd.DataFrame) -> None:
     guardar_reglas_pedidos_db({"reglas": reglas})
 
 
-def armar_excel_pedido_mail(editor: pd.DataFrame, manuales: list[dict] | None = None) -> bytes:
+def armar_excel_pedido_mail(editor: pd.DataFrame, manuales: list[dict] | None = None, marca_filtro: str | None = None) -> bytes:
     filas = []
+    marca_filtro = str(marca_filtro or "").strip().upper()
     if editor is not None and not editor.empty:
         for row in editor.to_dict("records"):
+            marca = str(row.get("Marca", "") or "").strip().upper()
+            if marca_filtro and marca != marca_filtro:
+                continue
             qty = pd.to_numeric(row.get("QTY", 0), errors="coerce")
             if pd.isna(qty) or float(qty) <= 0:
                 continue
@@ -1986,6 +2045,9 @@ def armar_excel_pedido_mail(editor: pd.DataFrame, manuales: list[dict] | None = 
             if code and order:
                 filas.append({"ORDER": order, "CODE": code, "QTY": float(qty)})
     for row in manuales or []:
+        marca = str(row.get("Marca", "") or "").strip().upper()
+        if marca_filtro and marca != marca_filtro:
+            continue
         qty = pd.to_numeric(row.get("QTY", 0), errors="coerce")
         if pd.isna(qty) or float(qty) <= 0:
             continue
@@ -1998,6 +2060,261 @@ def armar_excel_pedido_mail(editor: pd.DataFrame, manuales: list[dict] | None = 
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         salida.to_excel(writer, index=False, sheet_name="ORDER")
     return buffer.getvalue()
+
+
+def armar_excel_pedido_mail_separado(editor: pd.DataFrame, manuales: list[dict] | None = None) -> bytes:
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        for marca in ["MAZDA", "KIA"]:
+            filas = []
+            if editor is not None and not editor.empty:
+                for row in editor.to_dict("records"):
+                    if str(row.get("Marca", "") or "").strip().upper() != marca:
+                        continue
+                    qty = pd.to_numeric(row.get("QTY", 0), errors="coerce")
+                    if pd.isna(qty) or float(qty) <= 0:
+                        continue
+                    filas.append({
+                        "ORDER": str(row.get("ORDER", "") or "").strip().upper(),
+                        "CODE": str(row.get("CODE", "") or "").strip().upper(),
+                        "QTY": float(qty),
+                    })
+            for row in manuales or []:
+                if str(row.get("Marca", "") or "").strip().upper() != marca:
+                    continue
+                qty = pd.to_numeric(row.get("QTY", 0), errors="coerce")
+                if pd.isna(qty) or float(qty) <= 0:
+                    continue
+                filas.append({
+                    "ORDER": str(row.get("ORDER", "") or "").strip().upper(),
+                    "CODE": str(row.get("CODE", "") or "").strip().upper(),
+                    "QTY": float(qty),
+                })
+            pd.DataFrame(filas, columns=["ORDER", "CODE", "QTY"]).to_excel(writer, index=False, sheet_name=marca)
+    return buffer.getvalue()
+
+
+def cargar_historial_pedidos_db() -> Dict[str, object]:
+    estado = cargar_estado_db("pedidos_historial", {"pedidos": [], "pedido_seq": 0})
+    if not isinstance(estado, dict):
+        return {"pedidos": [], "pedido_seq": 0}
+    estado.setdefault("pedidos", [])
+    estado.setdefault("pedido_seq", 0)
+    return estado
+
+
+def guardar_historial_pedidos_db(estado: Dict[str, object]) -> None:
+    guardar_estado_db("pedidos_historial", estado)
+
+
+def estado_pedido_pendiente(estado: str) -> bool:
+    texto = str(estado or "").strip().upper()
+    return texto not in {"RECIBIDO", "CERRADO", "CANCELADO", "ANULADO", "CUBIERTO POR STOCK/JIT"}
+
+
+def pedidos_pendientes_por_codigo() -> pd.DataFrame:
+    columnas = ["Codigo normalizado", "Pedido pendiente", "Ultimo pedido"]
+    estado = cargar_historial_pedidos_db()
+    filas = []
+    for pedido in estado.get("pedidos", []):
+        pedido_estado = str(pedido.get("estado", "PENDIENTE") or "PENDIENTE")
+        if not estado_pedido_pendiente(pedido_estado):
+            continue
+        fecha = str(pedido.get("fecha_pedido", "") or "")
+        for linea in pedido.get("lineas", []):
+            linea_estado = str(linea.get("estado", pedido_estado) or pedido_estado)
+            if not estado_pedido_pendiente(linea_estado):
+                continue
+            codigo = normalizar_codigo(linea.get("codigo_normalizado", "") or linea.get("code", ""))
+            cantidad = numero_seguro(linea.get("cantidad_pendiente", linea.get("qty", 0)), 0)
+            if codigo and cantidad > 0:
+                filas.append({"Codigo normalizado": codigo, "Pedido pendiente": cantidad, "Ultimo pedido": fecha})
+    if not filas:
+        return pd.DataFrame(columns=columnas)
+    df = pd.DataFrame(filas)
+    resumen = (
+        df.groupby("Codigo normalizado", as_index=False)
+        .agg(**{"Pedido pendiente": ("Pedido pendiente", "sum"), "Ultimo pedido": ("Ultimo pedido", "max")})
+    )
+    return resumen[columnas]
+
+
+def registrar_pedido_historial(editor: pd.DataFrame, manuales: list[dict] | None = None, observaciones: str = "") -> Dict[str, object]:
+    estado = cargar_historial_pedidos_db()
+    pedidos = estado.get("pedidos", [])
+    pedido_seq = int(estado.get("pedido_seq", 0) or 0) + 1
+    ahora = ahora_texto()
+    lineas = []
+
+    def agregar_linea(row: dict, es_manual: bool = False) -> None:
+        qty = numero_seguro(row.get("QTY", 0), 0)
+        if qty <= 0:
+            return
+        marca = str(row.get("Marca", "") or "").strip().upper()
+        code = str(row.get("CODE", "") or "").strip().upper()
+        codigo_norm = normalizar_codigo(row.get("Codigo normalizado", "") or code)
+        articulo = str(row.get("Articulo", "") or code).strip().upper()
+        if not marca:
+            marca = clasificar_marca_codigo(articulo or code, codigo_norm, row.get("Descripcion", ""))
+        if not code:
+            code = codigo_para_pedido_mail(marca, articulo, codigo_norm)
+        if not codigo_norm:
+            codigo_norm = normalizar_codigo(code)
+        if not code or not codigo_norm:
+            return
+        lineas.append(
+            {
+                "linea_id": len(lineas) + 1,
+                "marca": marca,
+                "order": str(row.get("ORDER", "") or "").strip().upper(),
+                "code": code,
+                "qty": qty,
+                "cantidad_pendiente": qty,
+                "codigo_normalizado": codigo_norm,
+                "articulo": articulo,
+                "descripcion": str(row.get("Descripcion", "") or "").strip(),
+                "via": str(row.get("Via", row.get("Via sugerida", "")) or "").strip(),
+                "stock_fisico_al_pedir": numero_seguro(row.get("Stock fisico", 0), 0),
+                "pedido_pendiente_previo": numero_seguro(row.get("Pedido pendiente", 0), 0),
+                "stock_proyectado_al_pedir": numero_seguro(row.get("Stock proyectado", 0), 0),
+                "venta_mensual": numero_seguro(row.get("Venta mensual", 0), 0),
+                "cantidad_sugerida_original": numero_seguro(row.get("Cantidad sugerida original", row.get("Cantidad sugerida", qty)), qty),
+                "motivo": str(row.get("Motivo", "") or "").strip(),
+                "decision_usuario": str(row.get("Decision usuario", "") or "").strip(),
+                "comentario_usuario": str(row.get("Comentario usuario", "") or row.get("Comentario", "") or "").strip(),
+                "manual": bool(es_manual),
+                "estado": "PENDIENTE",
+            }
+        )
+
+    if editor is not None and not editor.empty:
+        for row in editor.to_dict("records"):
+            agregar_linea(row, False)
+    for row in manuales or []:
+        agregar_linea(row, True)
+
+    if not lineas:
+        return estado
+    pedidos.append(
+        {
+            "pedido_id": pedido_seq,
+            "fecha_pedido": ahora,
+            "estado": "PENDIENTE",
+            "observaciones": str(observaciones or "").strip(),
+            "lineas": lineas,
+        }
+    )
+    estado = {"pedidos": pedidos[-100:], "pedido_seq": pedido_seq}
+    guardar_historial_pedidos_db(estado)
+    return estado
+
+
+def crear_backorder_desde_editor(editor: pd.DataFrame, manuales: list[dict] | None = None, observaciones: str = "") -> Dict[str, object]:
+    estado = cargar_backorders_db()
+    existentes = estado.get("pedidos", [])
+    pedido_seq = int(estado.get("pedido_seq", 0) or 0) + 1
+    ahora = ahora_texto()
+    lineas = []
+
+    def agregar_linea(row: dict, es_manual: bool = False) -> None:
+        qty = numero_seguro(row.get("QTY", 0), 0)
+        if qty <= 0:
+            return
+        marca = str(row.get("Marca", "") or "").strip().upper()
+        code = str(row.get("CODE", "") or "").strip().upper()
+        codigo = normalizar_codigo(row.get("Codigo normalizado", "") or code)
+        articulo = str(row.get("Articulo", "") or code).strip().upper()
+        if not marca:
+            marca = clasificar_marca_codigo(articulo, codigo, row.get("Descripcion", ""))
+        lineas.append(
+            {
+                "linea_id": len(lineas) + 1,
+                "codigo_normalizado": codigo,
+                "articulo": articulo,
+                "descripcion": str(row.get("Descripcion", "") or "").strip(),
+                "marca": marca,
+                "via": str(row.get("Via", row.get("Via sugerida", "")) or "").strip(),
+                "cantidad_pedida": qty,
+                "cantidad_pendiente_manual": qty,
+                "fecha_pedido": ahora,
+                "estado": "BACK ORDER",
+                "observaciones": observaciones,
+                "manual": bool(es_manual),
+            }
+        )
+
+    if editor is not None and not editor.empty:
+        for row in editor.to_dict("records"):
+            agregar_linea(row, False)
+    for row in manuales or []:
+        agregar_linea(row, True)
+    if not lineas:
+        return estado
+    existentes.append(
+        {
+            "pedido_id": pedido_seq,
+            "fecha_pedido": ahora,
+            "estado": "BACK ORDER",
+            "observaciones": observaciones,
+            "lineas": lineas,
+        }
+    )
+    estado = {"pedidos": existentes[-50:], "pedido_seq": pedido_seq}
+    guardar_backorders_db(estado)
+    return estado
+
+
+def historial_pedidos_df(estado: Dict[str, object] | None = None) -> pd.DataFrame:
+    columnas = [
+        "Pedido", "Fecha pedido", "Estado pedido", "Marca", "ORDER", "CODE", "QTY", "Pendiente", "Estado linea",
+        "Codigo normalizado", "Articulo", "Descripcion", "Via", "Stock fisico al pedir", "Pedido pendiente previo",
+        "Stock proyectado al pedir", "Venta mensual", "Motivo", "Observaciones",
+    ]
+    estado = estado or cargar_historial_pedidos_db()
+    filas = []
+    for pedido in estado.get("pedidos", []):
+        for linea in pedido.get("lineas", []):
+            filas.append(
+                {
+                    "Pedido": pedido.get("pedido_id", ""),
+                    "Fecha pedido": pedido.get("fecha_pedido", ""),
+                    "Estado pedido": pedido.get("estado", ""),
+                    "Marca": linea.get("marca", ""),
+                    "ORDER": linea.get("order", ""),
+                    "CODE": linea.get("code", ""),
+                    "QTY": linea.get("qty", 0),
+                    "Pendiente": linea.get("cantidad_pendiente", linea.get("qty", 0)),
+                    "Estado linea": linea.get("estado", ""),
+                    "Codigo normalizado": linea.get("codigo_normalizado", ""),
+                    "Articulo": linea.get("articulo", ""),
+                    "Descripcion": linea.get("descripcion", ""),
+                    "Via": linea.get("via", ""),
+                    "Stock fisico al pedir": linea.get("stock_fisico_al_pedir", 0),
+                    "Pedido pendiente previo": linea.get("pedido_pendiente_previo", 0),
+                    "Stock proyectado al pedir": linea.get("stock_proyectado_al_pedir", 0),
+                    "Venta mensual": linea.get("venta_mensual", 0),
+                    "Motivo": linea.get("motivo", ""),
+                    "Observaciones": pedido.get("observaciones", ""),
+                }
+            )
+    return pd.DataFrame(filas, columns=columnas)
+
+
+def actualizar_estado_pedido_historial(pedido_id: int, nuevo_estado: str) -> Dict[str, object]:
+    estado = cargar_historial_pedidos_db()
+    nuevo_estado = str(nuevo_estado or "").strip().upper()
+    for pedido in estado.get("pedidos", []):
+        if int(pedido.get("pedido_id", 0) or 0) == int(pedido_id):
+            pedido["estado"] = nuevo_estado
+            pedido["actualizado_en"] = ahora_texto()
+            for linea in pedido.get("lineas", []):
+                linea["estado"] = nuevo_estado
+                if not estado_pedido_pendiente(nuevo_estado):
+                    linea["cantidad_pendiente"] = 0
+                else:
+                    linea["cantidad_pendiente"] = linea.get("qty", linea.get("cantidad_pendiente", 0))
+    guardar_historial_pedidos_db(estado)
+    return estado
 
 
 def crear_backorder_desde_sugerencia(pedidos: pd.DataFrame, observaciones: str = "") -> Dict[str, object]:
@@ -4386,10 +4703,36 @@ def admin_habilitado() -> bool:
     return bool(st.session_state.get("admin_habilitado", False))
 
 
+def preparar_recarga_desde_postgres() -> None:
+    st.cache_data.clear()
+    for key in [
+        "pick_items",
+        "pick_seq",
+        "pallet_seq",
+        "salidas_polo",
+        "salida_seq",
+        "remito_seq",
+        "salidas_darkinel",
+        "salida_darkinel_seq",
+        "remito_darkinel_seq",
+        "conteo_darkinel",
+        "firma_stock_darkinel_actual",
+        "firma_frecuencia_ventas_actual",
+        "firma_control_polo_actual",
+    ]:
+        st.session_state.pop(key, None)
+    st.session_state["forzar_uso_postgres_una_corrida"] = True
+    st.session_state["ultima_recarga_postgres"] = ahora_texto()
+
+
 # -----------------------------
 # Interfaz
 # -----------------------------
+if st.session_state.pop("recargar_datos_postgres_pendiente", False):
+    preparar_recarga_desde_postgres()
+
 inicializar_estado()
+forzar_uso_postgres = bool(st.session_state.pop("forzar_uso_postgres_una_corrida", False))
 
 st.title("Lector de codigos + Mudanza Darkinel -> Polo Logistico")
 st.caption(
@@ -4404,6 +4747,13 @@ with st.sidebar:
         st.error("PostgreSQL local no conectado")
         if st.session_state.get("ultimo_error_db"):
             st.caption(st.session_state["ultimo_error_db"])
+    if st.button("Recargar datos desde PostgreSQL", key="recargar_datos_postgres", type="secondary"):
+        st.session_state["recargar_datos_postgres_pendiente"] = True
+        st.rerun()
+    if forzar_uso_postgres:
+        st.info("Datos recargados desde PostgreSQL.")
+    elif st.session_state.get("ultima_recarga_postgres"):
+        st.caption(f"Ultima recarga PostgreSQL: {st.session_state['ultima_recarga_postgres']}")
     uploaded = st.file_uploader("Subi el archivo de stock de DARKINEL", type=["xls", "xlsx", "xlsm", "csv"])
 
     stock_guardado_sidebar = cargar_archivo_estado("stock_darkinel_actual")
@@ -4549,7 +4899,7 @@ with st.sidebar:
     )
 
 stock_guardado = cargar_archivo_estado("stock_darkinel_actual")
-if uploaded is not None:
+if uploaded is not None and not forzar_uso_postgres:
     stock_bytes = uploaded.getvalue()
     stock_filename = uploaded.name
     guardar_archivo_si_cambio("stock_darkinel_actual", stock_filename, stock_bytes)
@@ -4579,7 +4929,7 @@ if stock_df.empty:
 
 stock_consolidado = consolidar_por_codigo(stock_df)
 frecuencia_guardada = cargar_archivo_estado("frecuencia_ventas_actual")
-if uploaded_frecuencia is not None:
+if uploaded_frecuencia is not None and not forzar_uso_postgres:
     try:
         frecuencia_bytes = uploaded_frecuencia.getvalue()
         frecuencia_filename = uploaded_frecuencia.name
@@ -4595,7 +4945,7 @@ if uploaded_frecuencia is not None:
         ventas_detalle_df = pd.DataFrame(columns=["codigo_normalizado", "descripcion_venta", "fecha_venta", "unidades_vendidas"])
         st.sidebar.error("No pude leer el archivo de frecuencia.")
         st.sidebar.exception(e)
-elif frecuencia_guardada and usar_frecuencia_guardada:
+elif frecuencia_guardada and (usar_frecuencia_guardada or forzar_uso_postgres):
     try:
         frecuencia_bytes = frecuencia_guardada["contenido"]
         frecuencia_filename = frecuencia_guardada.get("nombre", "ventas_guardadas.xlsx")
@@ -4615,7 +4965,7 @@ else:
     ventas_detalle_df = pd.DataFrame(columns=["codigo_normalizado", "descripcion_venta", "fecha_venta", "unidades_vendidas"])
 
 polo_guardado = cargar_archivo_estado("control_polo_actual")
-if uploaded_polo is not None:
+if uploaded_polo is not None and not forzar_uso_postgres:
     polo_bytes = uploaded_polo.getvalue()
     polo_filename = uploaded_polo.name
     st.info(
@@ -4631,7 +4981,7 @@ if uploaded_polo is not None:
         polo_bytes = polo_guardado["contenido"]
         polo_filename = polo_guardado.get("nombre", "control_polo_guardado.xlsx")
         stock_polo_anterior, ubicaciones_anteriores, historial_anterior, detalle_mudanza_anterior = leer_base_polo_anterior(polo_bytes, polo_filename)
-elif polo_guardado and usar_polo_guardado:
+elif polo_guardado and (usar_polo_guardado or forzar_uso_postgres):
     polo_bytes = polo_guardado["contenido"]
     polo_filename = polo_guardado.get("nombre", "control_polo_guardado.xlsx")
     stock_polo_anterior, ubicaciones_anteriores, historial_anterior, detalle_mudanza_anterior = leer_base_polo_anterior(polo_bytes, polo_filename)
@@ -4642,7 +4992,7 @@ df_pick = pick_items_df()
 df_reimpresion = detalle_excel_a_pick_items(detalle_mudanza_anterior)
 palets_pick = pallets_unicos_df(df_pick)
 palets_reimpresion = pallets_unicos_df(df_reimpresion)
-if uploaded_polo is not None and df_reimpresion.empty:
+if uploaded_polo is not None and not forzar_uso_postgres and df_reimpresion.empty:
     st.error(
         "El archivo cargado como control Polo no tiene detalle de mudanza legible. "
         "Tiene que ser el Excel de control generado por esta app, no el stock diario de Nodum."
@@ -6201,7 +6551,14 @@ elif seccion_activa == "7) Pedidos":
     cobertura_extra_pedido = p_cfg2.number_input("Cobertura extra al llegar", min_value=0.0, max_value=12.0, value=0.5, step=0.5)
     solo_con_pedido = p_cfg3.checkbox("Mostrar solo sugeridos", value=True)
     incluir_sin_venta_pedido = p_cfg4.checkbox("Incluir sin venta mensual", value=False)
+    marca_pedido = st.radio(
+        "Fabrica / marca para revisar",
+        ["TODAS", "MAZDA", "KIA"],
+        horizontal=True,
+        help="Mazda se identifica por codigos con guion; Kia por codigos sin guion.",
+    )
 
+    pedidos_pendientes_actuales = pedidos_pendientes_por_codigo()
     pedidos_df = preparar_sugerencia_pedidos(
         balance_actual,
         frecuencias_df,
@@ -6209,12 +6566,15 @@ elif seccion_activa == "7) Pedidos":
         int(meses_promedio_pedido),
         float(cobertura_extra_pedido),
         incluir_sin_venta=incluir_sin_venta_pedido,
+        pedidos_pendientes=pedidos_pendientes_actuales,
     )
     pedidos_df = aplicar_reglas_usuario_pedidos(pedidos_df)
     if solo_con_pedido and not pedidos_df.empty:
         pedidos_vista = pedidos_df[pedidos_df["Cantidad sugerida"] > 0].copy()
     else:
         pedidos_vista = pedidos_df.copy()
+    if marca_pedido != "TODAS" and not pedidos_vista.empty and "Marca" in pedidos_vista.columns:
+        pedidos_vista = pedidos_vista[pedidos_vista["Marca"].astype(str).str.upper().eq(marca_pedido)].copy()
 
     total_sugerido = int(pd.to_numeric(pedidos_vista.get("Cantidad sugerida", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not pedidos_vista.empty else 0
     por_via = pedidos_vista.groupby("Via sugerida")["Cantidad sugerida"].sum().to_dict() if not pedidos_vista.empty else {}
@@ -6255,8 +6615,8 @@ elif seccion_activa == "7) Pedidos":
         st.info("No hay sugerencias con los filtros actuales.")
     else:
         columnas_pedidos = [
-            "Via sugerida", "Politica JIT", "Codigo normalizado", "Articulo", "Descripcion", "Frecuencia", "Meses sin venta",
-            "Venta mensual", "Stock fisico", "Stock Darkinel", "Stock Polo", "Cobertura meses",
+            "Marca", "Via sugerida", "Politica JIT", "Codigo normalizado", "Articulo", "Descripcion", "Frecuencia", "Meses sin venta",
+            "Venta mensual", "Stock fisico", "Stock Darkinel", "Stock Polo", "Pedido pendiente", "Stock proyectado", "Cobertura meses",
             "Cantidad sugerida", "Objetivo stock", "Pedido maritimo 6 meses",
             "Pedido aereo 35 dias", "Pedido VOR 20 dias", "Motivo",
         ]
@@ -6276,17 +6636,30 @@ elif seccion_activa == "7) Pedidos":
         st.markdown("**Pedido para enviar por mail**")
         order_default = st.text_input("ORDER por defecto", value="HC1EA", key="order_default_mail")
         pedido_mail_base = pedidos_vista[pedidos_vista["Cantidad sugerida"] > 0].copy()
+        if not pedido_mail_base.empty and "Marca" not in pedido_mail_base.columns:
+            pedido_mail_base["Marca"] = pedido_mail_base.apply(
+                lambda r: clasificar_marca_codigo(r.get("Articulo", ""), r.get("Codigo normalizado", ""), r.get("Descripcion", "")),
+                axis=1,
+            )
         pedido_editor_base = pd.DataFrame(
             {
+                "Marca": pedido_mail_base["Marca"].astype(str) if "Marca" in pedido_mail_base.columns else "",
                 "ORDER": str(order_default).strip().upper() or "HC1EA",
-                "CODE": pedido_mail_base["Articulo"].where(
-                    pedido_mail_base["Articulo"].astype(str).str.strip().ne(""),
-                    pedido_mail_base["Codigo normalizado"],
-                ).astype(str).str.strip().str.upper(),
+                "CODE": pedido_mail_base.apply(
+                    lambda r: codigo_para_pedido_mail(r.get("Marca", ""), r.get("Articulo", ""), r.get("Codigo normalizado", "")),
+                    axis=1,
+                ) if not pedido_mail_base.empty else [],
                 "QTY": pd.to_numeric(pedido_mail_base["Cantidad sugerida"], errors="coerce").fillna(0),
+                "Cantidad sugerida original": pd.to_numeric(pedido_mail_base["Cantidad sugerida"], errors="coerce").fillna(0),
                 "Codigo normalizado": pedido_mail_base["Codigo normalizado"].astype(str),
+                "Articulo": pedido_mail_base["Articulo"].astype(str),
                 "Descripcion": pedido_mail_base["Descripcion"].astype(str),
                 "Via": pedido_mail_base["Via sugerida"].astype(str),
+                "Venta mensual": pd.to_numeric(pedido_mail_base["Venta mensual"] if "Venta mensual" in pedido_mail_base.columns else pd.Series([0] * len(pedido_mail_base)), errors="coerce").fillna(0),
+                "Stock fisico": pd.to_numeric(pedido_mail_base["Stock fisico"] if "Stock fisico" in pedido_mail_base.columns else pd.Series([0] * len(pedido_mail_base)), errors="coerce").fillna(0),
+                "Pedido pendiente": pd.to_numeric(pedido_mail_base["Pedido pendiente"] if "Pedido pendiente" in pedido_mail_base.columns else pd.Series([0] * len(pedido_mail_base)), errors="coerce").fillna(0),
+                "Stock proyectado": pd.to_numeric(pedido_mail_base["Stock proyectado"] if "Stock proyectado" in pedido_mail_base.columns else pd.Series([0] * len(pedido_mail_base)), errors="coerce").fillna(0),
+                "Motivo": pedido_mail_base.get("Motivo", "").astype(str) if "Motivo" in pedido_mail_base.columns else "",
                 "Decision usuario": pedido_mail_base.get("Decision usuario", "").astype(str) if "Decision usuario" in pedido_mail_base.columns else "",
                 "Comentario usuario": pedido_mail_base.get("Comentario usuario", "").astype(str) if "Comentario usuario" in pedido_mail_base.columns else "",
             }
@@ -6295,7 +6668,7 @@ elif seccion_activa == "7) Pedidos":
             pedido_editor_base,
             use_container_width=True,
             hide_index=True,
-            disabled=["CODE", "Codigo normalizado", "Descripcion", "Via"],
+            disabled=["Marca", "CODE", "Codigo normalizado", "Articulo", "Descripcion", "Via", "Cantidad sugerida original", "Venta mensual", "Stock fisico", "Pedido pendiente", "Stock proyectado", "Motivo"],
             column_config={
                 "QTY": st.column_config.NumberColumn("QTY", min_value=0.0, step=1.0),
                 "Decision usuario": st.column_config.SelectboxColumn(
@@ -6310,9 +6683,10 @@ elif seccion_activa == "7) Pedidos":
         st.markdown("**Agregar codigo manual al pedido**")
         if "pedido_manual_rows" not in st.session_state:
             st.session_state.pedido_manual_rows = []
-        man1, man2, man3 = st.columns([1, 1.5, 1])
+        man0, man1, man2, man3 = st.columns([0.8, 1, 1.5, 1])
+        manual_marca = man0.selectbox("Marca manual", ["MAZDA", "KIA"], key="manual_marca_pedido")
         manual_order = man1.text_input("ORDER manual", value=str(order_default).strip().upper() or "HC1EA", key="manual_order_pedido")
-        manual_code = man2.text_input("CODE manual nuevo", placeholder="Codigo que no esta en la base", key="manual_code_pedido")
+        manual_code = man2.text_input("CODE manual nuevo", placeholder="Mazda con guion / Kia sin guion", key="manual_code_pedido")
         manual_qty = man3.number_input("QTY manual", min_value=0.0, value=0.0, step=1.0, key="manual_qty_pedido")
         manual_comment = st.text_input("Comentario manual", placeholder="Motivo / proveedor / referencia", key="manual_comment_pedido")
         if st.button("Agregar codigo manual"):
@@ -6321,11 +6695,17 @@ elif seccion_activa == "7) Pedidos":
             elif float(manual_qty or 0) <= 0:
                 st.error("La cantidad manual tiene que ser mayor a cero.")
             else:
+                codigo_manual_mail = codigo_para_pedido_mail(manual_marca, manual_code, manual_code)
                 st.session_state.pedido_manual_rows.append(
                     {
+                        "Marca": str(manual_marca).strip().upper(),
                         "ORDER": str(manual_order).strip().upper() or "HC1EA",
-                        "CODE": str(manual_code).strip().upper(),
+                        "CODE": codigo_manual_mail,
                         "QTY": float(manual_qty),
+                        "Codigo normalizado": normalizar_codigo(manual_code),
+                        "Articulo": str(manual_code).strip().upper(),
+                        "Descripcion": "",
+                        "Via": "MANUAL",
                         "Comentario": str(manual_comment).strip(),
                     }
                 )
@@ -6342,19 +6722,34 @@ elif seccion_activa == "7) Pedidos":
             st.success("Decisiones guardadas. Se van a aplicar en proximas sugerencias.")
             st.rerun()
 
-        st.download_button(
-            "Descargar Excel pedido para mail",
-            data=armar_excel_pedido_mail(pedido_editor, st.session_state.get("pedido_manual_rows", [])),
-            file_name=f"pedido_mail_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        d1, d2, d3 = st.columns(3)
+        d1.download_button(
+            "Descargar pedido MAZDA",
+            data=armar_excel_pedido_mail(pedido_editor, st.session_state.get("pedido_manual_rows", []), marca_filtro="MAZDA"),
+            file_name=f"pedido_mazda_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        d2.download_button(
+            "Descargar pedido KIA",
+            data=armar_excel_pedido_mail(pedido_editor, st.session_state.get("pedido_manual_rows", []), marca_filtro="KIA"),
+            file_name=f"pedido_kia_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        d3.download_button(
+            "Descargar completo separado",
+            data=armar_excel_pedido_mail_separado(pedido_editor, st.session_state.get("pedido_manual_rows", [])),
+            file_name=f"pedido_separado_marcas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-        st.markdown("**Crear back order**")
+        st.markdown("**Confirmar pedido**")
         obs_backorder = st.text_input("Observaciones del pedido", placeholder="Proveedor / marca / comentario", key="obs_backorder_pedido")
-        if st.button("Guardar sugerencia filtrada como back order", type="primary"):
-            nuevo_estado = crear_backorder_desde_sugerencia(pedidos_vista, obs_backorder)
-            lineas_guardadas = sum(len(p.get("lineas", [])) for p in nuevo_estado.get("pedidos", [])[-1:])
-            st.success(f"Back order guardado con {lineas_guardadas} linea(s). Se recalculara contra el stock diario.")
+        if st.button("Confirmar pedido y guardar en historial", type="primary"):
+            guardar_aprendizaje_pedido(pedido_editor)
+            nuevo_historial = registrar_pedido_historial(pedido_editor, st.session_state.get("pedido_manual_rows", []), obs_backorder)
+            lineas_guardadas = sum(len(p.get("lineas", [])) for p in nuevo_historial.get("pedidos", [])[-1:])
+            st.session_state.pedido_manual_rows = []
+            st.success(f"Pedido confirmado con {lineas_guardadas} linea(s). Quedo en historial y se descontara como pedido pendiente en proximas sugerencias JIT.")
             st.rerun()
 
     st.markdown("---")
@@ -6403,6 +6798,41 @@ elif seccion_activa == "7) Pedidos":
                             linea["estado"] = "CUBIERTO POR STOCK/JIT"
                 guardar_backorders_db(estado_actualizado)
                 st.success(f"Se marcaron {len(codigos_cubiertos)} codigo(s) como cubiertos.")
+                st.rerun()
+
+    st.markdown("---")
+    st.subheader("Historial de pedidos generados")
+    historial_estado = cargar_historial_pedidos_db()
+    historial_df = historial_pedidos_df(historial_estado)
+    if historial_df.empty:
+        st.info("Todavia no hay pedidos confirmados en historial.")
+    else:
+        hist_pend = historial_df[historial_df["Estado linea"].astype(str).str.upper().apply(estado_pedido_pendiente)].copy()
+        h1, h2, h3 = st.columns(3)
+        h1.metric("Pedidos guardados", f"{historial_df['Pedido'].nunique():,}".replace(",", "."))
+        h2.metric("Lineas pendientes", f"{len(hist_pend):,}".replace(",", "."))
+        h3.metric("Piezas pendientes", f"{int(pd.to_numeric(hist_pend.get('Pendiente', pd.Series(dtype=float)), errors='coerce').fillna(0).sum()):,}".replace(",", "."))
+        st.dataframe(limpiar_df_visible(historial_df.sort_values(["Pedido", "Marca", "CODE"], ascending=[False, True, True])), use_container_width=True, hide_index=True)
+
+        buffer_hist = io.BytesIO()
+        with pd.ExcelWriter(buffer_hist, engine="openpyxl") as writer:
+            limpiar_df_visible(historial_df).to_excel(writer, index=False, sheet_name="HISTORIAL_PEDIDOS")
+            limpiar_df_visible(pedidos_pendientes_por_codigo()).to_excel(writer, index=False, sheet_name="PENDIENTE_POR_CODIGO")
+        st.download_button(
+            "Descargar historial de pedidos Excel",
+            data=buffer_hist.getvalue(),
+            file_name=f"historial_pedidos_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        pedidos_ids = sorted({int(x) for x in historial_df["Pedido"].dropna().tolist() if str(x).strip()}, reverse=True)
+        if pedidos_ids:
+            c_hist1, c_hist2, c_hist3 = st.columns([1, 1.2, 1])
+            pedido_a_actualizar = c_hist1.selectbox("Pedido a actualizar", pedidos_ids, key="historial_pedido_actualizar")
+            estado_nuevo_hist = c_hist2.selectbox("Nuevo estado", ["RECIBIDO", "CANCELADO", "PENDIENTE"], key="historial_estado_nuevo")
+            if c_hist3.button("Actualizar estado pedido"):
+                actualizar_estado_pedido_historial(int(pedido_a_actualizar), estado_nuevo_hist)
+                st.success(f"Pedido {pedido_a_actualizar} actualizado a {estado_nuevo_hist}.")
                 st.rerun()
 
     st.caption("Politica JIT: mas de 18 meses sin venta va a oferta; mas de 24 meses no se repone y se retira de gondola; mas de 40 meses va a stock muerto/scrap.")
