@@ -70,7 +70,7 @@ POSTGRES_DEFAULTS = {
     "password": "deposito_pass_cambiar",
 }
 CLOUD_TABLE = "estado_app"
-APP_VERSION_PEDIDOS = "2026-06-12 12:20 - FORZAR UBICACION POR PALLET DESDE COMPOSICION"
+APP_VERSION_PEDIDOS = "2026-06-12 12:50 - SIN ERROR POSTGRES + FORZAR UBICACION POR PALLET"
 
 
 def ahora_texto() -> str:
@@ -139,7 +139,16 @@ def nube_disponible() -> bool:
         return False
 
 
+def _clave_estado_fallback(clave: str) -> str:
+    return f"_estado_fallback_{clave}"
+
+
 def guardar_estado_db(clave: str, valor) -> None:
+    """
+    Guarda en PostgreSQL cuando esta disponible.
+    Si la app corre en Streamlit Cloud y PostgreSQL local no existe, NO debe romper la app:
+    guarda una copia temporal en session_state y continua.
+    """
     try:
         with conectar_db() as conn:
             with conn.cursor() as cur:
@@ -156,7 +165,12 @@ def guardar_estado_db(clave: str, valor) -> None:
             conn.commit()
     except Exception as exc:
         registrar_error_db(exc)
-        raise
+        try:
+            st.session_state[_clave_estado_fallback(clave)] = valor
+        except Exception:
+            pass
+        # No relanzar el error: permite trabajar subiendo Excel aunque no haya PostgreSQL en Streamlit Cloud.
+        return
 
 
 def cargar_estado_db(clave: str, defecto):
@@ -166,14 +180,20 @@ def cargar_estado_db(clave: str, defecto):
                 cur.execute("SELECT valor FROM estado_app WHERE clave = %s", (clave,))
                 row = cur.fetchone()
         if not row:
-            return defecto
+            try:
+                return st.session_state.get(_clave_estado_fallback(clave), defecto)
+            except Exception:
+                return defecto
         valor = row[0]
         if isinstance(valor, str):
             return json.loads(valor)
         return valor
     except Exception as exc:
         registrar_error_db(exc)
-        return defecto
+        try:
+            return st.session_state.get(_clave_estado_fallback(clave), defecto)
+        except Exception:
+            return defecto
 
 
 def fecha_estado_db(clave: str) -> str:
@@ -5963,7 +5983,7 @@ elif seccion_activa == "2) Pallets / mudanza":
                 st.rerun()
 
     st.subheader("Composicion por pallet")
-    st.success("APP ACTUALIZADA: 2026-06-12 12:20 - FORZAR UBICACION POR PALLET DESDE COMPOSICION")
+    st.success("APP ACTUALIZADA: 2026-06-12 12:50 - SIN ERROR POSTGRES + FORZAR UBICACION POR PALLET")
 
     resumen_pallets_base = limpiar_df_visible(resumen_pallets(df_operativo))
 
