@@ -70,7 +70,7 @@ POSTGRES_DEFAULTS = {
     "password": "deposito_pass_cambiar",
 }
 CLOUD_TABLE = "estado_app"
-APP_VERSION_PEDIDOS = "2026-06-12 08:10 - IMPORTAR PEDIDO MODIFICADO + BACK ORDER / EMBARCADO / ARRIBADO"
+APP_VERSION_PEDIDOS = "2026-06-12 10:20 - UBICACIONES SINCRONIZADAS PALLET + DETALLE"
 
 
 def ahora_texto() -> str:
@@ -4524,6 +4524,107 @@ def historial_mudanzas(df_pick: pd.DataFrame, historial_anterior: pd.DataFrame) 
     )
 
 
+
+
+def aplicar_ubicaciones_actuales_a_operativo(df_base: pd.DataFrame, df_actual: pd.DataFrame) -> pd.DataFrame:
+    """
+    Sincroniza ubicaciones cuando el control anterior es mas completo que la mudanza activa.
+    Problema que corrige: si se edita el pallet en Detalle de mudanza, la Composicion por pallet
+    no debe seguir mostrando una locacion vieja tomada del control anterior.
+    """
+    if df_base is None or df_base.empty or df_actual is None or df_actual.empty:
+        return df_base
+
+    try:
+        base = normalizar_df_pick(df_base).copy()
+        actual = normalizar_df_pick(df_actual).copy()
+    except Exception:
+        return df_base
+
+    if base.empty or actual.empty:
+        return df_base
+
+    for col in ["deposito_origen", "deposito_destino", "articulo", "codigo_normalizado", "ubicacion"]:
+        if col in base.columns:
+            base[col] = base[col].astype(str).str.strip()
+        if col in actual.columns:
+            actual[col] = actual[col].astype(str).str.strip()
+
+    base["pallet"] = pd.to_numeric(base.get("pallet", 0), errors="coerce").fillna(0).astype(int)
+    base["bulto"] = pd.to_numeric(base.get("bulto", 0), errors="coerce").fillna(0).astype(int)
+    actual["pallet"] = pd.to_numeric(actual.get("pallet", 0), errors="coerce").fillna(0).astype(int)
+    actual["bulto"] = pd.to_numeric(actual.get("bulto", 0), errors="coerce").fillna(0).astype(int)
+    base["cantidad_bultos"] = pd.to_numeric(base.get("cantidad_bultos", 0), errors="coerce").fillna(0).astype(int)
+    actual["cantidad_bultos"] = pd.to_numeric(actual.get("cantidad_bultos", 0), errors="coerce").fillna(0).astype(int)
+
+    actual["ubicacion"] = actual["ubicacion"].map(normalizar_locacion)
+    actual_reales = actual[actual["ubicacion"].apply(es_ubicacion_real)].copy()
+    if actual_reales.empty:
+        return base
+
+    # 1) Actualizacion puntual por linea: pallet + caja + articulo/codigo.
+    claves_linea = ["deposito_origen", "deposito_destino", "pallet", "bulto", "articulo", "codigo_normalizado"]
+    for c in claves_linea:
+        if c not in base.columns:
+            base[c] = ""
+        if c not in actual_reales.columns:
+            actual_reales[c] = ""
+    mapa_linea = (
+        actual_reales.sort_values("item_id" if "item_id" in actual_reales.columns else "fecha_hora")
+        .drop_duplicates(claves_linea, keep="last")
+        .set_index(claves_linea)["ubicacion"]
+        .to_dict()
+    )
+    if mapa_linea:
+        def _ubicacion_linea(row):
+            clave = tuple(row.get(c, "") for c in claves_linea)
+            return mapa_linea.get(clave, row.get("ubicacion", ""))
+
+        base["ubicacion"] = base.apply(_ubicacion_linea, axis=1)
+
+    # 2) Actualizacion por pallet completo: si la mudanza activa deja un pallet en una sola ubicacion real,
+    # aplica esa locacion a todas las lineas del mismo pallet, aunque vengan del control anterior.
+    claves_pallet = ["deposito_origen", "deposito_destino", "pallet"]
+    for c in claves_pallet:
+        if c not in base.columns:
+            base[c] = ""
+        if c not in actual_reales.columns:
+            actual_reales[c] = ""
+
+    ubic_pallet = {}
+    for clave, grupo in actual_reales.groupby(claves_pallet, dropna=False):
+        reales = [u for u in grupo["ubicacion"].map(normalizar_locacion).tolist() if es_ubicacion_real(u)]
+        unicas = list(dict.fromkeys(reales))
+        if len(unicas) == 1:
+            ubic_pallet[clave] = unicas[0]
+
+    if ubic_pallet:
+        def _ubicacion_pallet(row):
+            clave = tuple(row.get(c, "") for c in claves_pallet)
+            return ubic_pallet.get(clave, row.get("ubicacion", ""))
+
+        base["ubicacion"] = base.apply(_ubicacion_pallet, axis=1)
+
+    base["ubicacion"] = base["ubicacion"].map(normalizar_locacion)
+    base.loc[base["ubicacion"] == "", "ubicacion"] = "PENDIENTE"
+    if "ubicacion_recepcion" in base.columns:
+        base["ubicacion_recepcion"] = base["ubicacion"]
+
+    # 3) Si hay lineas actuales que no estaban en el control anterior, tambien se agregan al operativo.
+    claves_existentes = set()
+    for _, row in base.iterrows():
+        claves_existentes.add(tuple(row.get(c, "") for c in claves_linea))
+    faltantes = []
+    for _, row in actual.iterrows():
+        clave = tuple(row.get(c, "") for c in claves_linea)
+        if clave not in claves_existentes:
+            faltantes.append(row.to_dict())
+    if faltantes:
+        base = pd.concat([base, pd.DataFrame(faltantes)], ignore_index=True)
+
+    return base
+
+
 def preparar_recepcion_polo(df_pick: pd.DataFrame) -> pd.DataFrame:
     columnas = [
         "Fecha recepcion", "Receptor", "OK recepcion", "Pallet", "Caja", "Ubicacion informada",
@@ -5276,6 +5377,8 @@ control_anterior_mas_completo = (
     )
 )
 df_operativo = df_reimpresion if (df_pick.empty or control_anterior_mas_completo) else df_pick
+if not df_pick.empty and not df_operativo.empty:
+    df_operativo = aplicar_ubicaciones_actuales_a_operativo(df_operativo, df_pick)
 usando_control_anterior = (df_pick.empty or control_anterior_mas_completo) and not df_reimpresion.empty
 mudanza_activa_es_control_anterior = False if control_anterior_mas_completo else misma_mudanza(df_pick, df_reimpresion)
 ubicaciones_operativas = pd.DataFrame() if usando_control_anterior or mudanza_activa_es_control_anterior else ubicaciones_anteriores
@@ -5764,7 +5867,7 @@ elif seccion_activa == "2) Pallets / mudanza":
                 st.rerun()
 
     st.subheader("Composicion por pallet")
-    st.success("APP ACTUALIZADA: 2026-06-12 09:45 - UBICACIONES POR PALLET EDITABLES Y GUARDABLES")
+    st.success("APP ACTUALIZADA: 2026-06-12 10:20 - UBICACIONES SINCRONIZADAS ENTRE COMPOSICION Y DETALLE")
     resumen_pallets_base = limpiar_df_visible(resumen_pallets(df_operativo))
 
     if resumen_pallets_base.empty:
@@ -5772,7 +5875,7 @@ elif seccion_activa == "2) Pallets / mudanza":
     else:
         st.warning(
             "Para cambiar una ubicacion no alcanza con tocar la tabla: escribi la nueva ubicacion y presiona GUARDAR. "
-            "El cambio queda aplicado a todos los articulos/cajas del pallet."
+            "El cambio queda aplicado a todos los articulos/cajas del pallet y se sincroniza con el detalle."
         )
 
         # --------------------------------------------------------------
