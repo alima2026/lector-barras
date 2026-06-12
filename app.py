@@ -70,7 +70,7 @@ POSTGRES_DEFAULTS = {
     "password": "deposito_pass_cambiar",
 }
 CLOUD_TABLE = "estado_app"
-APP_VERSION_PEDIDOS = "2026-06-11 21:45 - PEDIDOS POR MARCA Y MODALIDAD VOR/AEREO/MARITIMO"
+APP_VERSION_PEDIDOS = "2026-06-12 08:10 - IMPORTAR PEDIDO MODIFICADO + BACK ORDER / EMBARCADO / ARRIBADO"
 
 
 def ahora_texto() -> str:
@@ -668,6 +668,7 @@ def codigo_para_pedido_mail(marca: str, articulo="", codigo_normalizado="") -> s
 
 
 MODALIDADES_PEDIDO = ["VOR", "AEREO", "MARITIMO"]
+ESTADOS_PEDIDO_FABRICA = ["BACK ORDER", "DISPONIBILIDAD CERCANA", "ARRIBADO", "CANCELADO"]
 
 
 def normalizar_modalidad_pedido(valor, default: str = "MARITIMO") -> str:
@@ -2118,6 +2119,240 @@ def armar_excel_pedido_mail_separado(editor: pd.DataFrame, manuales: list[dict] 
             escribir_excel_pedido_por_modalidad(writer, filas, prefijo_hoja=marca)
     return buffer.getvalue()
 
+
+
+def _columna_por_nombres(tabla: pd.DataFrame, nombres: list[str]) -> str:
+    if tabla is None or tabla.empty:
+        return ""
+    objetivos = {normalizar_codigo(n) for n in nombres}
+    for col in tabla.columns:
+        if normalizar_codigo(col) in objetivos:
+            return col
+    return ""
+
+
+def _modo_importar_hojas_pedido(modo: str) -> bool:
+    texto = str(modo or "").strip().upper()
+    return "VOR" in texto or "AEREO" in texto or "MARITIMO" in texto or "HOJAS" in texto
+
+
+def leer_pedido_fabrica_subido(file_bytes: bytes, filename: str, marca_default: str = "MAZDA", preferir_hojas_modalidad: bool = False) -> pd.DataFrame:
+    """Lee el Excel que se descargó para fabrica y que el usuario puede haber modificado.
+    Acepta hoja TODOS con MODALIDAD/ORDER/CODE/QTY o hojas VOR, AEREO y MARITIMO.
+    Devuelve lineas normalizadas para guardar en historial/back order.
+    """
+    columnas = ["Marca", "ORDER", "CODE", "QTY", "Modalidad pedido", "Codigo normalizado", "Articulo", "Descripcion", "Archivo origen", "Hoja origen"]
+    if not file_bytes:
+        return pd.DataFrame(columns=columnas)
+
+    nombre = str(filename or "pedido_importado.xlsx")
+    marca_default = str(marca_default or "").strip().upper()
+    if marca_default not in {"MAZDA", "KIA", "DETECTAR"}:
+        marca_default = "DETECTAR"
+
+    try:
+        xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+    except Exception:
+        try:
+            xls = pd.ExcelFile(io.BytesIO(file_bytes))
+        except Exception:
+            return pd.DataFrame(columns=columnas)
+
+    def leer_hoja(sheet_name: str, modalidad_forzada: str | None = None) -> list[dict]:
+        try:
+            tabla = pd.read_excel(xls, sheet_name=sheet_name, dtype=object)
+        except Exception:
+            return []
+        if tabla is None or tabla.empty:
+            return []
+        tabla = tabla.dropna(how="all").copy()
+        if tabla.empty:
+            return []
+
+        col_order = _columna_por_nombres(tabla, ["ORDER", "ORDEN", "PEDIDO"])
+        col_code = _columna_por_nombres(tabla, ["CODE", "CODIGO", "CÓDIGO", "ARTICULO", "ARTÍCULO"])
+        col_qty = _columna_por_nombres(tabla, ["QTY", "CANTIDAD", "CANT", "UNIDADES"])
+        col_mod = _columna_por_nombres(tabla, ["MODALIDAD", "MODALIDAD PEDIDO", "VIA", "VÍA", "VIA PEDIDO"])
+        col_desc = _columna_por_nombres(tabla, ["DESCRIPCION", "DESCRIPCIÓN", "DETALLE"])
+        col_marca = _columna_por_nombres(tabla, ["MARCA", "FABRICA", "FÁBRICA"])
+        if not col_code or not col_qty:
+            return []
+
+        filas = []
+        for _, row in tabla.iterrows():
+            code_raw = str(row.get(col_code, "") or "").strip().upper()
+            if not code_raw or code_raw in {"NAN", "NONE"}:
+                continue
+            qty = numero_seguro(row.get(col_qty, 0), 0)
+            if qty <= 0:
+                continue
+            modalidad_raw = modalidad_forzada or (row.get(col_mod, "") if col_mod else "")
+            modalidad = normalizar_modalidad_pedido(modalidad_raw, "MARITIMO")
+            marca = str(row.get(col_marca, "") if col_marca else "").strip().upper()
+            if marca not in {"MAZDA", "KIA"}:
+                if marca_default in {"MAZDA", "KIA"}:
+                    marca = marca_default
+                else:
+                    marca = clasificar_marca_codigo(code_raw, normalizar_codigo(code_raw), row.get(col_desc, "") if col_desc else "")
+            order = str(row.get(col_order, "") if col_order else "").strip().upper() or "HC1EA"
+            filas.append(
+                {
+                    "Marca": marca,
+                    "ORDER": order,
+                    "CODE": codigo_para_pedido_mail(marca, code_raw, code_raw),
+                    "QTY": float(qty),
+                    "Modalidad pedido": modalidad,
+                    "Codigo normalizado": normalizar_codigo(code_raw),
+                    "Articulo": code_raw,
+                    "Descripcion": str(row.get(col_desc, "") if col_desc else "").strip(),
+                    "Archivo origen": nombre,
+                    "Hoja origen": str(sheet_name),
+                }
+            )
+        return filas
+
+    nombres_hojas = [str(s) for s in xls.sheet_names]
+    hojas_modalidad = []
+    for hoja in nombres_hojas:
+        hoja_norm = normalizar_codigo(hoja)
+        if "TODO" in hoja_norm:
+            continue
+        mod = ""
+        if "VOR" in hoja_norm:
+            mod = "VOR"
+        elif "AEREO" in hoja_norm or "AIR" in hoja_norm:
+            mod = "AEREO"
+        elif "MARITIMO" in hoja_norm or "SEA" in hoja_norm:
+            mod = "MARITIMO"
+        if mod in MODALIDADES_PEDIDO:
+            hojas_modalidad.append((hoja, mod))
+
+    filas = []
+    if preferir_hojas_modalidad and hojas_modalidad:
+        for hoja, mod in hojas_modalidad:
+            filas.extend(leer_hoja(hoja, modalidad_forzada=mod))
+    if not filas:
+        hoja_todos = next((h for h in nombres_hojas if "TODO" in normalizar_codigo(h)), "")
+        if hoja_todos:
+            filas.extend(leer_hoja(hoja_todos, modalidad_forzada=None))
+    if not filas and hojas_modalidad:
+        for hoja, mod in hojas_modalidad:
+            filas.extend(leer_hoja(hoja, modalidad_forzada=mod))
+    if not filas:
+        for hoja in nombres_hojas:
+            filas.extend(leer_hoja(hoja, modalidad_forzada=None))
+
+    salida = pd.DataFrame(filas, columns=columnas)
+    if salida.empty:
+        return salida
+    salida["QTY"] = pd.to_numeric(salida["QTY"], errors="coerce").fillna(0)
+    salida = salida[salida["QTY"] > 0].copy()
+    salida["Modalidad pedido"] = salida["Modalidad pedido"].map(normalizar_modalidad_pedido)
+    salida["Marca"] = salida["Marca"].astype(str).str.upper().str.strip()
+    salida["Codigo normalizado"] = salida["Codigo normalizado"].map(normalizar_codigo)
+    return salida[columnas]
+
+
+def registrar_pedido_importado_historial(lineas_importadas: pd.DataFrame, observaciones: str = "", estado_inicial: str = "BACK ORDER") -> Dict[str, object]:
+    estado = cargar_historial_pedidos_db()
+    pedidos = estado.get("pedidos", [])
+    pedido_seq = int(estado.get("pedido_seq", 0) or 0) + 1
+    ahora = ahora_texto()
+    estado_inicial = str(estado_inicial or "BACK ORDER").strip().upper()
+    if estado_inicial not in ESTADOS_PEDIDO_FABRICA:
+        estado_inicial = "BACK ORDER"
+    lineas = []
+    base = lineas_importadas.copy() if lineas_importadas is not None else pd.DataFrame()
+    for row in base.to_dict("records"):
+        qty = numero_seguro(row.get("QTY", 0), 0)
+        if qty <= 0:
+            continue
+        marca = str(row.get("Marca", "") or "").strip().upper()
+        code = str(row.get("CODE", "") or row.get("Articulo", "") or "").strip().upper()
+        codigo_norm = normalizar_codigo(row.get("Codigo normalizado", "") or code)
+        if not marca:
+            marca = clasificar_marca_codigo(code, codigo_norm, row.get("Descripcion", ""))
+        if not code or not codigo_norm:
+            continue
+        lineas.append(
+            {
+                "linea_id": len(lineas) + 1,
+                "marca": marca,
+                "order": str(row.get("ORDER", "") or "HC1EA").strip().upper(),
+                "code": codigo_para_pedido_mail(marca, code, codigo_norm),
+                "qty": qty,
+                "cantidad_pendiente": qty if estado_pedido_pendiente(estado_inicial) else 0,
+                "codigo_normalizado": codigo_norm,
+                "articulo": str(row.get("Articulo", "") or code).strip().upper(),
+                "descripcion": str(row.get("Descripcion", "") or "").strip(),
+                "via": normalizar_modalidad_pedido(row.get("Modalidad pedido", "MARITIMO")),
+                "via_sugerida": "IMPORTADO DESDE EXCEL",
+                "stock_fisico_al_pedir": 0,
+                "pedido_pendiente_previo": 0,
+                "stock_proyectado_al_pedir": 0,
+                "venta_mensual": 0,
+                "cantidad_sugerida_original": qty,
+                "motivo": "Pedido cargado desde Excel modificado",
+                "decision_usuario": "",
+                "comentario_usuario": str(observaciones or "").strip(),
+                "manual": True,
+                "estado": estado_inicial,
+                "archivo_origen": str(row.get("Archivo origen", "") or "").strip(),
+                "hoja_origen": str(row.get("Hoja origen", "") or "").strip(),
+                "actualizado_en": ahora,
+            }
+        )
+    if not lineas:
+        return estado
+    archivo_origen = " / ".join(sorted({str(l.get("archivo_origen", "")).strip() for l in lineas if str(l.get("archivo_origen", "")).strip()}))
+    pedidos.append(
+        {
+            "pedido_id": pedido_seq,
+            "fecha_pedido": ahora,
+            "estado": estado_inicial,
+            "observaciones": str(observaciones or "").strip(),
+            "archivo_origen": archivo_origen,
+            "lineas": lineas,
+            "actualizado_en": ahora,
+        }
+    )
+    estado = {"pedidos": pedidos[-150:], "pedido_seq": pedido_seq}
+    guardar_historial_pedidos_db(estado)
+    return estado
+
+
+def control_arribados_en_stock_df(stock_consolidado: pd.DataFrame) -> pd.DataFrame:
+    columnas = ["Pedido", "Fecha pedido", "Marca", "CODE", "QTY arribada", "Codigo normalizado", "Stock Nodum actual", "Control"]
+    hist = historial_pedidos_df()
+    if hist.empty:
+        return pd.DataFrame(columns=columnas)
+    arribados = hist[hist["Estado linea"].astype(str).str.upper().eq("ARRIBADO")].copy()
+    if arribados.empty:
+        return pd.DataFrame(columns=columnas)
+    stock_map = {}
+    if stock_consolidado is not None and not stock_consolidado.empty and "codigo_normalizado" in stock_consolidado.columns:
+        tmp = stock_consolidado.copy()
+        tmp["codigo_normalizado"] = tmp["codigo_normalizado"].map(normalizar_codigo)
+        tmp["cantidad"] = pd.to_numeric(tmp.get("cantidad", 0), errors="coerce").fillna(0)
+        stock_map = tmp.groupby("codigo_normalizado")["cantidad"].sum().to_dict()
+    filas = []
+    for _, row in arribados.iterrows():
+        codigo = normalizar_codigo(row.get("Codigo normalizado", "") or row.get("CODE", ""))
+        stock_actual = float(stock_map.get(codigo, 0) or 0)
+        filas.append(
+            {
+                "Pedido": row.get("Pedido", ""),
+                "Fecha pedido": row.get("Fecha pedido", ""),
+                "Marca": row.get("Marca", ""),
+                "CODE": row.get("CODE", ""),
+                "QTY arribada": row.get("QTY", 0),
+                "Codigo normalizado": codigo,
+                "Stock Nodum actual": stock_actual,
+                "Control": "OK EN STOCK DARKINEL/NODUM" if stock_actual > 0 else "FALTA EN STOCK DARKINEL/NODUM",
+            }
+        )
+    return pd.DataFrame(filas, columns=columnas)
+
 def cargar_historial_pedidos_db() -> Dict[str, object]:
     estado = cargar_estado_db("pedidos_historial", {"pedidos": [], "pedido_seq": 0})
     if not isinstance(estado, dict):
@@ -2133,7 +2368,8 @@ def guardar_historial_pedidos_db(estado: Dict[str, object]) -> None:
 
 def estado_pedido_pendiente(estado: str) -> bool:
     texto = str(estado or "").strip().upper()
-    return texto not in {"RECIBIDO", "CERRADO", "CANCELADO", "ANULADO", "CUBIERTO POR STOCK/JIT"}
+    # Estados que todavia deben entrar en el calculo JIT como cantidad ya pedida.
+    return texto in {"PENDIENTE", "BACK ORDER", "DISPONIBILIDAD CERCANA", "EMBARCADO", "EN TRANSITO"}
 
 
 def pedidos_pendientes_por_codigo() -> pd.DataFrame:
@@ -2208,7 +2444,7 @@ def registrar_pedido_historial(editor: pd.DataFrame, manuales: list[dict] | None
                 "decision_usuario": str(row.get("Decision usuario", "") or "").strip(),
                 "comentario_usuario": str(row.get("Comentario usuario", "") or row.get("Comentario", "") or "").strip(),
                 "manual": bool(es_manual),
-                "estado": "PENDIENTE",
+                "estado": "BACK ORDER",
             }
         )
 
@@ -2224,7 +2460,7 @@ def registrar_pedido_historial(editor: pd.DataFrame, manuales: list[dict] | None
         {
             "pedido_id": pedido_seq,
             "fecha_pedido": ahora,
-            "estado": "PENDIENTE",
+            "estado": "BACK ORDER",
             "observaciones": str(observaciones or "").strip(),
             "lineas": lineas,
         }
@@ -2294,7 +2530,7 @@ def historial_pedidos_df(estado: Dict[str, object] | None = None) -> pd.DataFram
     columnas = [
         "Pedido", "Fecha pedido", "Estado pedido", "Marca", "ORDER", "CODE", "QTY", "Pendiente", "Estado linea",
         "Codigo normalizado", "Articulo", "Descripcion", "Via", "Stock fisico al pedir", "Pedido pendiente previo",
-        "Stock proyectado al pedir", "Venta mensual", "Motivo", "Observaciones",
+        "Stock proyectado al pedir", "Venta mensual", "Motivo", "Archivo origen", "Actualizado", "Observaciones",
     ]
     estado = estado or cargar_historial_pedidos_db()
     filas = []
@@ -2320,6 +2556,8 @@ def historial_pedidos_df(estado: Dict[str, object] | None = None) -> pd.DataFram
                     "Stock proyectado al pedir": linea.get("stock_proyectado_al_pedir", 0),
                     "Venta mensual": linea.get("venta_mensual", 0),
                     "Motivo": linea.get("motivo", ""),
+                    "Archivo origen": linea.get("archivo_origen", pedido.get("archivo_origen", "")),
+                    "Actualizado": linea.get("actualizado_en", pedido.get("actualizado_en", "")),
                     "Observaciones": pedido.get("observaciones", ""),
                 }
             )
@@ -6786,56 +7024,94 @@ elif seccion_activa == "7) Pedidos":
             nuevo_historial = registrar_pedido_historial(pedido_editor, st.session_state.get("pedido_manual_rows", []), obs_backorder)
             lineas_guardadas = sum(len(p.get("lineas", [])) for p in nuevo_historial.get("pedidos", [])[-1:])
             st.session_state.pedido_manual_rows = []
-            st.success(f"Pedido confirmado con {lineas_guardadas} linea(s). Quedo en historial y se descontara como pedido pendiente en proximas sugerencias JIT.")
+            st.success(f"Pedido confirmado con {lineas_guardadas} linea(s). Quedo en BACK ORDER y se descontara como pedido pendiente en proximas sugerencias JIT.")
             st.rerun()
 
     st.markdown("---")
-    st.subheader("Back order activo")
-    estado_backorders = cargar_backorders_db()
-    backorder_control = evaluar_backorders(estado_backorders, pedidos_df)
-    if backorder_control.empty:
-        st.info("Todavia no hay back order guardado.")
-    else:
-        pendientes_reales = int(pd.to_numeric(backorder_control["Pendiente segun JIT"], errors="coerce").fillna(0).sum())
-        demorados = int(backorder_control["Estado control"].eq("DEMORA > 6 MESES").sum())
-        cubiertos = int(backorder_control["Estado control"].eq("CUBIERTO / SACAR DEL BACK ORDER").sum())
-        b1, b2, b3 = st.columns(3)
-        b1.metric("Lineas back order", f"{len(backorder_control):,}".replace(",", "."))
-        b2.metric("Pendiente segun JIT", f"{pendientes_reales:,}".replace(",", "."))
-        b3.metric("Alertas > 6 meses", f"{demorados:,}".replace(",", "."))
-        if cubiertos:
-            st.warning(f"{cubiertos} linea(s) ya no deberian seguir en back order segun stock/venta actual.")
-        if demorados:
-            st.error("Hay pedidos con mas de 6 meses pendientes: resolver con otro proveedor o cambiar modalidad.")
-        st.dataframe(limpiar_df_visible(backorder_control), use_container_width=True, hide_index=True)
-
-        buffer_backorder = io.BytesIO()
-        with pd.ExcelWriter(buffer_backorder, engine="openpyxl") as writer:
-            limpiar_df_visible(backorder_control).to_excel(writer, index=False, sheet_name="BACK_ORDER_CONTROL")
-        st.download_button(
-            "Descargar control de back order Excel",
-            data=buffer_backorder.getvalue(),
-            file_name=f"back_order_control_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    st.subheader("Cargar pedido modificado por fabrica")
+    st.caption("Usa esto cuando descargaste Pedido MAZDA o KIA, modificaste cantidades/modalidad en Excel y queres volver a cargarlo al sistema. Al importarlo queda en BACK ORDER y entra en el calculo JIT como pedido pendiente.")
+    imp1, imp2, imp3 = st.columns([1, 1.3, 1])
+    marca_archivo_import = imp1.selectbox("Marca del archivo", ["MAZDA", "KIA", "DETECTAR"], key="marca_archivo_import_pedido")
+    modo_lectura_import = imp2.radio(
+        "Leer modalidad desde",
+        ["Hoja TODOS / columna MODALIDAD", "Hojas VOR-AEREO-MARITIMO"],
+        horizontal=True,
+        key="modo_lectura_import_pedido",
+    )
+    estado_inicial_import = imp3.selectbox("Estado inicial", ["BACK ORDER", "DISPONIBILIDAD CERCANA"], key="estado_inicial_import_pedido")
+    archivo_pedido_import = st.file_uploader(
+        "Subir Excel de pedido modificado",
+        type=["xlsx", "xlsm", "xls"],
+        key="upload_pedido_modificado_fabrica",
+    )
+    obs_import_pedido = st.text_input("Observaciones del pedido importado", placeholder="Proveedor / proforma / referencia / comentario", key="obs_import_pedido")
+    if archivo_pedido_import is not None:
+        contenido_import = archivo_pedido_import.getvalue()
+        preview_import = leer_pedido_fabrica_subido(
+            contenido_import,
+            archivo_pedido_import.name,
+            marca_default=marca_archivo_import,
+            preferir_hojas_modalidad=_modo_importar_hojas_pedido(modo_lectura_import),
         )
-
-        if st.button("Actualizar back order: sacar cubiertos del calculo"):
-            codigos_cubiertos = set(
-                backorder_control.loc[
-                    backorder_control["Estado control"].eq("CUBIERTO / SACAR DEL BACK ORDER"),
-                    "Codigo normalizado",
-                ].map(normalizar_codigo)
-            )
-            if codigos_cubiertos:
-                estado_actualizado = cargar_backorders_db()
-                for pedido in estado_actualizado.get("pedidos", []):
-                    for linea in pedido.get("lineas", []):
-                        if normalizar_codigo(linea.get("codigo_normalizado", "")) in codigos_cubiertos:
-                            linea["cantidad_pendiente_manual"] = 0
-                            linea["estado"] = "CUBIERTO POR STOCK/JIT"
-                guardar_backorders_db(estado_actualizado)
-                st.success(f"Se marcaron {len(codigos_cubiertos)} codigo(s) como cubiertos.")
+        if preview_import.empty:
+            st.error("No pude leer lineas del archivo. Tiene que tener columnas CODE y QTY, o hojas VOR/AEREO/MARITIMO con ORDER, CODE, QTY.")
+        else:
+            resumen_import = preview_import.groupby(["Marca", "Modalidad pedido"], as_index=False)["QTY"].sum()
+            st.dataframe(limpiar_df_visible(preview_import), use_container_width=True, hide_index=True)
+            st.caption("Resumen por marca y modalidad")
+            st.dataframe(limpiar_df_visible(resumen_import), use_container_width=True, hide_index=True)
+            if st.button("Importar archivo y dejar en BACK ORDER", type="primary", key="btn_importar_pedido_modificado"):
+                nuevo_estado = registrar_pedido_importado_historial(preview_import, obs_import_pedido, estado_inicial_import)
+                ultimo = nuevo_estado.get("pedidos", [])[-1] if nuevo_estado.get("pedidos") else {}
+                st.success(f"Pedido importado como {estado_inicial_import}. Lineas guardadas: {len(ultimo.get('lineas', []))}. Desde ahora entra en pedidos pendientes para la logica JIT.")
                 st.rerun()
+
+    st.markdown("---")
+    st.subheader("Back order activo")
+    historial_backorder_df = historial_pedidos_df()
+    if historial_backorder_df.empty:
+        st.info("Todavia no hay pedidos cargados en back order.")
+    else:
+        estados_pendientes_visibles = {"PENDIENTE", "BACK ORDER", "DISPONIBILIDAD CERCANA", "EMBARCADO", "EN TRANSITO"}
+        backorder_activo_df = historial_backorder_df[
+            historial_backorder_df["Estado linea"].astype(str).str.upper().isin(estados_pendientes_visibles)
+        ].copy()
+        if backorder_activo_df.empty:
+            st.info("No hay lineas activas en BACK ORDER o DISPONIBILIDAD CERCANA.")
+        else:
+            resumen_estado = backorder_activo_df.groupby(["Estado linea", "Via"], as_index=False)["Pendiente"].sum()
+            bo1, bo2, bo3, bo4 = st.columns(4)
+            bo1.metric("Lineas activas", f"{len(backorder_activo_df):,}".replace(",", "."))
+            bo2.metric("Piezas pendientes", f"{int(pd.to_numeric(backorder_activo_df['Pendiente'], errors='coerce').fillna(0).sum()):,}".replace(",", "."))
+            bo3.metric("Back order", f"{int(backorder_activo_df['Estado linea'].astype(str).str.upper().eq('BACK ORDER').sum()):,}".replace(",", "."))
+            bo4.metric("Disponibilidad cercana", f"{int(backorder_activo_df['Estado linea'].astype(str).str.upper().eq('DISPONIBILIDAD CERCANA').sum()):,}".replace(",", "."))
+            st.caption("Estas cantidades son las que la app toma como pedido pendiente para no volver a pedir de más en la logica JIT.")
+            st.dataframe(limpiar_df_visible(resumen_estado), use_container_width=True, hide_index=True)
+            st.dataframe(
+                limpiar_df_visible(backorder_activo_df.sort_values(["Estado linea", "Via", "Marca", "CODE"])),
+                use_container_width=True,
+                hide_index=True,
+            )
+            buffer_bo = io.BytesIO()
+            with pd.ExcelWriter(buffer_bo, engine="openpyxl") as writer:
+                limpiar_df_visible(backorder_activo_df).to_excel(writer, index=False, sheet_name="BACK_ORDER_ACTIVO")
+                limpiar_df_visible(resumen_estado).to_excel(writer, index=False, sheet_name="RESUMEN")
+            st.download_button(
+                "Descargar back order activo Excel",
+                data=buffer_bo.getvalue(),
+                file_name=f"back_order_activo_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+    control_arribados = control_arribados_en_stock_df(stock_consolidado)
+    if not control_arribados.empty:
+        faltantes_arribados = control_arribados[control_arribados["Control"].eq("FALTA EN STOCK DARKINEL/NODUM")].copy()
+        st.markdown("**Control de pedidos ARRIBADOS contra Stock Darkinel / Nodum**")
+        if not faltantes_arribados.empty:
+            st.warning("Hay pedidos marcados como ARRIBADO que todavía no aparecen en la planilla Stock Darkinel/Nodum cargada. Subí la planilla actualizada o revisá Nodum.")
+        else:
+            st.success("Los pedidos marcados como ARRIBADO aparecen en el stock cargado.")
+        st.dataframe(limpiar_df_visible(control_arribados), use_container_width=True, hide_index=True)
 
     st.markdown("---")
     st.subheader("Historial de pedidos generados")
@@ -6866,7 +7142,7 @@ elif seccion_activa == "7) Pedidos":
         if pedidos_ids:
             c_hist1, c_hist2, c_hist3 = st.columns([1, 1.2, 1])
             pedido_a_actualizar = c_hist1.selectbox("Pedido a actualizar", pedidos_ids, key="historial_pedido_actualizar")
-            estado_nuevo_hist = c_hist2.selectbox("Nuevo estado", ["RECIBIDO", "CANCELADO", "PENDIENTE"], key="historial_estado_nuevo")
+            estado_nuevo_hist = c_hist2.selectbox("Nuevo estado", ESTADOS_PEDIDO_FABRICA, key="historial_estado_nuevo")
             if c_hist3.button("Actualizar estado pedido"):
                 actualizar_estado_pedido_historial(int(pedido_a_actualizar), estado_nuevo_hist)
                 st.success(f"Pedido {pedido_a_actualizar} actualizado a {estado_nuevo_hist}.")
