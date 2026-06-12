@@ -717,6 +717,78 @@ def normalizar_locacion(valor) -> str:
     return texto
 
 
+
+
+UBICACIONES_PALLET_OVERRIDE_CLAVE = "ubicaciones_pallet_override"
+
+
+def clave_ubicacion_pallet(deposito_origen, deposito_destino, pallet) -> str:
+    origen = str(deposito_origen or "").strip().upper() or "DARKINEL"
+    destino = str(deposito_destino or "").strip().upper() or "POLO LOGISTICO"
+    try:
+        pallet_int = int(float(pallet or 0))
+    except Exception:
+        pallet_int = 0
+    return f"{origen}|{destino}|{pallet_int}"
+
+
+def cargar_ubicaciones_pallet_override() -> Dict[str, str]:
+    estado = cargar_estado_db(UBICACIONES_PALLET_OVERRIDE_CLAVE, {})
+    if not isinstance(estado, dict):
+        return {}
+    salida = {}
+    for k, v in estado.items():
+        ubic = normalizar_locacion(v)
+        if ubic and ubic not in {"PENDIENTE", "NAN"}:
+            salida[str(k)] = ubic
+    return salida
+
+
+def guardar_ubicaciones_pallet_override(mapa: Dict[str, str]) -> None:
+    estado = cargar_ubicaciones_pallet_override()
+    for k, v in (mapa or {}).items():
+        ubic = normalizar_locacion(v)
+        if ubic and ubic not in {"PENDIENTE", "NAN"}:
+            estado[str(k)] = ubic
+    guardar_estado_db(UBICACIONES_PALLET_OVERRIDE_CLAVE, estado)
+
+
+def guardar_ubicacion_pallet_override(deposito_origen, deposito_destino, pallet, ubicacion) -> None:
+    clave = clave_ubicacion_pallet(deposito_origen, deposito_destino, pallet)
+    guardar_ubicaciones_pallet_override({clave: ubicacion})
+
+
+def aplicar_ubicaciones_pallet_override(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aplica una ubicacion forzada por pallet por encima del control anterior.
+    Esto evita que Composicion por pallet muestre una ubicacion vieja aunque Detalle de mudanza ya este corregido.
+    """
+    if df is None or df.empty:
+        return df
+    overrides = cargar_ubicaciones_pallet_override()
+    if not overrides:
+        return df
+    try:
+        trabajo = normalizar_df_pick(df).copy()
+    except Exception:
+        trabajo = df.copy()
+    for col in ["deposito_origen", "deposito_destino", "pallet", "ubicacion"]:
+        if col not in trabajo.columns:
+            if col == "deposito_origen":
+                trabajo[col] = "DARKINEL"
+            elif col == "deposito_destino":
+                trabajo[col] = "POLO LOGISTICO"
+            elif col == "pallet":
+                trabajo[col] = 0
+            else:
+                trabajo[col] = "PENDIENTE"
+    for idx, row in trabajo.iterrows():
+        clave = clave_ubicacion_pallet(row.get("deposito_origen"), row.get("deposito_destino"), row.get("pallet"))
+        if clave in overrides:
+            trabajo.at[idx, "ubicacion"] = overrides[clave]
+            trabajo.at[idx, "ubicacion_recepcion"] = overrides[clave]
+    return trabajo
+
 def agregar_unico(lista: List[str], valor: str) -> None:
     valor = normalizar_codigo(valor)
     if valor and valor not in lista:
@@ -5353,8 +5425,8 @@ elif polo_guardado and (usar_polo_guardado or forzar_uso_postgres):
 else:
     stock_polo_anterior, ubicaciones_anteriores, historial_anterior, detalle_mudanza_anterior = pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-df_pick = pick_items_df()
-df_reimpresion = detalle_excel_a_pick_items(detalle_mudanza_anterior)
+df_pick = aplicar_ubicaciones_pallet_override(pick_items_df())
+df_reimpresion = aplicar_ubicaciones_pallet_override(detalle_excel_a_pick_items(detalle_mudanza_anterior))
 palets_pick = pallets_unicos_df(df_pick)
 palets_reimpresion = pallets_unicos_df(df_reimpresion)
 if uploaded_polo is not None and not forzar_uso_postgres and df_reimpresion.empty:
@@ -5379,6 +5451,7 @@ control_anterior_mas_completo = (
 df_operativo = df_reimpresion if (df_pick.empty or control_anterior_mas_completo) else df_pick
 if not df_pick.empty and not df_operativo.empty:
     df_operativo = aplicar_ubicaciones_actuales_a_operativo(df_operativo, df_pick)
+df_operativo = aplicar_ubicaciones_pallet_override(df_operativo)
 usando_control_anterior = (df_pick.empty or control_anterior_mas_completo) and not df_reimpresion.empty
 mudanza_activa_es_control_anterior = False if control_anterior_mas_completo else misma_mudanza(df_pick, df_reimpresion)
 ubicaciones_operativas = pd.DataFrame() if usando_control_anterior or mudanza_activa_es_control_anterior else ubicaciones_anteriores
@@ -5867,7 +5940,8 @@ elif seccion_activa == "2) Pallets / mudanza":
                 st.rerun()
 
     st.subheader("Composicion por pallet")
-    st.success("APP ACTUALIZADA: 2026-06-12 10:20 - UBICACIONES SINCRONIZADAS ENTRE COMPOSICION Y DETALLE")
+    st.success("APP ACTUALIZADA: 2026-06-12 10:45 - UBICACION FORZADA POR PALLET SINCRONIZADA")
+    st.info("Si corregis una ubicacion en Detalle, la app guarda una ubicacion forzada por pallet para que Composicion no vuelva a tomar la ubicacion vieja del control anterior.")
     resumen_pallets_base = limpiar_df_visible(resumen_pallets(df_operativo))
 
     if resumen_pallets_base.empty:
@@ -5949,6 +6023,7 @@ elif seccion_activa == "2) Pallets / mudanza":
                                 item["ubicacion_recepcion"] = nueva_ubicacion
                                 item["observaciones"] = (str(item.get("observaciones", "")).strip() + " | Ubicacion modificada por pallet").strip(" |")
                                 cambios_ubicacion += 1
+                        guardar_ubicacion_pallet_override(reg_sel["origen"], reg_sel["destino"], reg_sel["pallet"], nueva_ubicacion)
                         guardar_mudanza_actual_db()
                         if cambios_ubicacion:
                             st.success(f"Ubicacion del pallet {reg_sel['pallet']} actualizada a {nueva_ubicacion} en {cambios_ubicacion} linea(s).")
@@ -6006,6 +6081,7 @@ elif seccion_activa == "2) Pallets / mudanza":
         if st.button("Guardar ubicaciones marcadas", type="primary", key="btn_guardar_ubi_masivo"):
             cambios_ubicacion = 0
             pallets_actualizados = []
+            overrides_a_guardar = {}
             for row in editor_ubi_editado.to_dict("records"):
                 row = {limpiar_columna_visible(k): v for k, v in row.items()}
                 aplicar = bool(row.get("Aplicar cambio", False))
@@ -6020,6 +6096,7 @@ elif seccion_activa == "2) Pallets / mudanza":
                 if not nueva_ubicacion:
                     continue
                 cambios_pallet = 0
+                overrides_a_guardar[clave_ubicacion_pallet(depo_origen_obj, depo_destino_obj, pallet_objetivo)] = nueva_ubicacion
                 for item in st.session_state.get("pick_items", []):
                     if not isinstance(item, dict):
                         continue
@@ -6037,6 +6114,8 @@ elif seccion_activa == "2) Pallets / mudanza":
                         cambios_pallet += 1
                 if cambios_pallet:
                     pallets_actualizados.append(f"Pallet {pallet_objetivo} -> {nueva_ubicacion}")
+            if overrides_a_guardar:
+                guardar_ubicaciones_pallet_override(overrides_a_guardar)
             guardar_mudanza_actual_db()
             if cambios_ubicacion:
                 st.success("Ubicaciones guardadas: " + "; ".join(pallets_actualizados))
@@ -6130,8 +6209,23 @@ elif seccion_activa == "2) Pallets / mudanza":
                 item["cantidad_mudada"] = suma_cantidades_bulto(item["cantidades_bulto"], piezas_enviadas, item["bulto"]) or numero_seguro(piezas_enviadas, 0)
                 item["codigo_normalizado"] = str(row.get("Codigo normalizado", "")).strip() or normalizar_codigo(item["articulo"])
                 item["observaciones"] = str(row.get("Observaciones", "")).strip()
+            overrides_detalle = {}
+            try:
+                detalle_tmp = detalle_editado.copy()
+                detalle_tmp.columns = [limpiar_columna_visible(c) for c in detalle_tmp.columns]
+                for clave_cols, grupo in detalle_tmp.groupby(["Deposito origen", "Deposito destino", "Pallet"], dropna=False):
+                    origen_tmp, destino_tmp, pallet_tmp = clave_cols
+                    ubicaciones_tmp = [normalizar_locacion(u) for u in grupo.get("Ubicacion", pd.Series(dtype=object)).tolist()]
+                    ubicaciones_tmp = [u for u in ubicaciones_tmp if u and u not in {"PENDIENTE", "NAN"}]
+                    unicas_tmp = list(dict.fromkeys(ubicaciones_tmp))
+                    if len(unicas_tmp) == 1:
+                        overrides_detalle[clave_ubicacion_pallet(origen_tmp, destino_tmp, pallet_tmp)] = unicas_tmp[0]
+            except Exception:
+                overrides_detalle = {}
+            if overrides_detalle:
+                guardar_ubicaciones_pallet_override(overrides_detalle)
             guardar_mudanza_actual_db()
-            st.success("Detalle actualizado.")
+            st.success("Detalle actualizado. Las ubicaciones por pallet quedaron sincronizadas con Composicion por pallet.")
             st.rerun()
 
     if not df_operativo.empty:
