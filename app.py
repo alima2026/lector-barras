@@ -5764,7 +5764,68 @@ elif seccion_activa == "2) Pallets / mudanza":
                 st.rerun()
 
     st.subheader("Composicion por pallet")
-    st.dataframe(limpiar_df_visible(resumen_pallets(df_operativo)), use_container_width=True, hide_index=True)
+    st.info("APP ACTUALIZADA: 2026-06-12 09:15 - EDICION DE UBICACIONES POR PALLET")
+    resumen_pallets_base = limpiar_df_visible(resumen_pallets(df_operativo))
+    if resumen_pallets_base.empty:
+        st.dataframe(resumen_pallets_base, use_container_width=True, hide_index=True)
+    else:
+        st.caption("Edita la columna Ubicaciones y guarda. El cambio se aplica a todos los articulos/cajas del pallet seleccionado.")
+        resumen_pallets_editado = st.data_editor(
+            resumen_pallets_base,
+            use_container_width=True,
+            hide_index=True,
+            disabled=[
+                "Deposito origen",
+                "Deposito destino",
+                "Pallet",
+                "Cantidad de cajas",
+                "Cantidad de codigos diferentes",
+                "Piezas totales",
+                "Codigos que componen el pallet",
+                "Descripciones",
+            ],
+            column_config={
+                "Ubicaciones": st.column_config.TextColumn(
+                    "Ubicaciones",
+                    help="Nueva ubicacion del pallet. Ejemplo: 3C4, 4E2, 3J4.1. Si un pallet debe dividirse en varias ubicaciones, edita el Detalle de mudanza por caja/articulo.",
+                    required=False,
+                ),
+            },
+            num_rows="fixed",
+            key="resumen_pallets_ubicaciones_editor",
+        )
+        col_guardar_ubi, col_ayuda_ubi = st.columns([1, 3])
+        if col_guardar_ubi.button("Guardar ubicaciones por pallet", type="primary"):
+            cambios_ubicacion = 0
+            por_id = {int(item.get("item_id", 0)): item for item in st.session_state.get("pick_items", []) if isinstance(item, dict)}
+            for row in resumen_pallets_editado.to_dict("records"):
+                row = {limpiar_columna_visible(k): v for k, v in row.items()}
+                pallet_objetivo = entero_seguro(row.get("Pallet", 0), 0)
+                if pallet_objetivo <= 0:
+                    continue
+                depo_origen_obj = str(row.get("Deposito origen", "")).strip().upper()
+                depo_destino_obj = str(row.get("Deposito destino", "")).strip().upper()
+                nueva_ubicacion = normalizar_locacion(row.get("Ubicaciones", ""))
+                if not nueva_ubicacion:
+                    nueva_ubicacion = "PENDIENTE"
+                for item in por_id.values():
+                    if entero_seguro(item.get("pallet", 0), 0) != pallet_objetivo:
+                        continue
+                    if depo_origen_obj and str(item.get("deposito_origen", "")).strip().upper() != depo_origen_obj:
+                        continue
+                    if depo_destino_obj and str(item.get("deposito_destino", "")).strip().upper() != depo_destino_obj:
+                        continue
+                    if str(item.get("ubicacion", "")).strip().upper() != nueva_ubicacion:
+                        item["ubicacion"] = nueva_ubicacion
+                        item["ubicacion_recepcion"] = nueva_ubicacion
+                        cambios_ubicacion += 1
+            guardar_mudanza_actual_db()
+            if cambios_ubicacion:
+                st.success(f"Ubicaciones actualizadas en {cambios_ubicacion} linea(s) de mudanza.")
+            else:
+                st.info("No hubo cambios para guardar.")
+            st.rerun()
+        col_ayuda_ubi.caption("Para una ubicacion unica del pallet, usa esta tabla. Para cambiar solo una caja o un articulo, usa la tabla Detalle de mudanza de abajo.")
 
     st.subheader("Detalle de mudanza")
     detalle_display = preparar_detalle_mudanza(df_operativo)
