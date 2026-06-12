@@ -58,6 +58,8 @@ st.set_page_config(
     layout="wide",
 )
 
+APP_VERSION_PEDIDOS = "2026-06-11 18:05 - PEDIDOS SEPARADOS MAZDA/KIA + HISTORIAL JIT"
+
 
 # -----------------------------
 # NormalizaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n de cÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digos
@@ -4735,6 +4737,7 @@ inicializar_estado()
 forzar_uso_postgres = bool(st.session_state.pop("forzar_uso_postgres_una_corrida", False))
 
 st.title("Lector de codigos + Mudanza Darkinel -> Polo Logistico")
+st.success(f"APP ACTUALIZADA: {APP_VERSION_PEDIDOS}")
 st.caption(
     "Busca codigos en la base, arma pallets, registra ubicaciones, controla salidas de Polo y genera las bases actualizadas de DARKINEL y POLO LOGISTICO."
 )
@@ -6544,7 +6547,8 @@ elif seccion_activa == "6) Consulta stock":
 
 elif seccion_activa == "7) Pedidos":
     st.subheader("Sugerencia de pedidos")
-    st.caption("Cruza venta mensual, stock fisico y demora estimada: maritimo 6 meses, aereo 35 dias y aereo VOR 20 dias.")
+    st.info("El pedido ahora se trabaja separado: MAZDA = codigos con guion / KIA = codigos sin guion. Si ves KIA mezclado con MAZDA, no estas ejecutando esta version.")
+    st.caption("Cruza venta mensual, stock fisico, pedidos pendientes historicos y demora estimada: maritimo 6 meses, aereo 35 dias y aereo VOR 20 dias.")
 
     p_cfg1, p_cfg2, p_cfg3, p_cfg4 = st.columns([1, 1, 1, 1])
     meses_promedio_pedido = p_cfg1.number_input("Promedio venta ultimos meses", min_value=1, max_value=24, value=6, step=1)
@@ -6552,8 +6556,8 @@ elif seccion_activa == "7) Pedidos":
     solo_con_pedido = p_cfg3.checkbox("Mostrar solo sugeridos", value=True)
     incluir_sin_venta_pedido = p_cfg4.checkbox("Incluir sin venta mensual", value=False)
     marca_pedido = st.radio(
-        "Fabrica / marca para revisar",
-        ["TODAS", "MAZDA", "KIA"],
+        "Fabrica / marca para revisar - NO MEZCLA MARCAS",
+        ["MAZDA", "KIA", "TODAS"],
         horizontal=True,
         help="Mazda se identifica por codigos con guion; Kia por codigos sin guion.",
     )
