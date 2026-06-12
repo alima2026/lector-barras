@@ -3863,6 +3863,9 @@ def resumen_pallets(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=columnas)
     trabajo = canonizar_mudanza_recepcion(df)
+    # La composicion SIEMPRE debe respetar las ubicaciones corregidas por el usuario.
+    # Si el control anterior trae una ubicacion vieja, el override por pallet la pisa antes del resumen.
+    trabajo = aplicar_ubicaciones_pallet_override(trabajo)
     trabajo = canonizar_mudanza_recepcion(pd.DataFrame(quitar_placeholders_con_detalle(trabajo.to_dict("records"))))
     resumen = (
         trabajo.groupby(["deposito_origen", "deposito_destino", "pallet", "cantidad_bultos"], dropna=False)
@@ -5940,190 +5943,117 @@ elif seccion_activa == "2) Pallets / mudanza":
                 st.rerun()
 
     st.subheader("Composicion por pallet")
-    st.success("APP ACTUALIZADA: 2026-06-12 10:45 - UBICACION FORZADA POR PALLET SINCRONIZADA")
-    st.info("Si corregis una ubicacion en Detalle, la app guarda una ubicacion forzada por pallet para que Composicion no vuelva a tomar la ubicacion vieja del control anterior.")
+    st.success("APP ACTUALIZADA: 2026-06-12 11:20 - EDITAR UBICACION DIRECTO EN COMPOSICION Y APLICAR EN CASCADA")
+    st.warning(
+        "Ahora la ubicacion se cambia DIRECTO en esta tabla de Composicion por pallet. "
+        "Edita la columna Ubicaciones y toca GUARDAR UBICACIONES DE ESTA TABLA. "
+        "La app aplica el cambio en cascada a todas las cajas/articulos del pallet y guarda un override para que no vuelva a aparecer la ubicacion vieja del control anterior."
+    )
+
     resumen_pallets_base = limpiar_df_visible(resumen_pallets(df_operativo))
 
     if resumen_pallets_base.empty:
         st.dataframe(resumen_pallets_base, use_container_width=True, hide_index=True)
     else:
-        st.warning(
-            "Para cambiar una ubicacion no alcanza con tocar la tabla: escribi la nueva ubicacion y presiona GUARDAR. "
-            "El cambio queda aplicado a todos los articulos/cajas del pallet y se sincroniza con el detalle."
-        )
+        resumen_editor = resumen_pallets_base.copy()
+        resumen_editor.columns = [limpiar_columna_visible(c) for c in resumen_editor.columns]
+        if "Ubicaciones" not in resumen_editor.columns:
+            resumen_editor["Ubicaciones"] = ""
+        resumen_editor["Ubicacion anterior"] = resumen_editor["Ubicaciones"].fillna("").astype(str)
 
-        # --------------------------------------------------------------
-        # Editor rapido: sirve aunque la grilla grande no permita editar.
-        # --------------------------------------------------------------
-        resumen_norm = resumen_pallets_base.copy()
-        resumen_norm.columns = [limpiar_columna_visible(c) for c in resumen_norm.columns]
-        registros_pallet = []
-        for row in resumen_norm.to_dict("records"):
-            pallet_num = entero_seguro(row.get("Pallet", 0), 0)
-            if pallet_num <= 0:
-                continue
-            origen_txt = str(row.get("Deposito origen", "")).strip().upper()
-            destino_txt = str(row.get("Deposito destino", "")).strip().upper()
-            ubic_txt = str(row.get("Ubicaciones", "")).strip().upper()
-            registros_pallet.append(
-                {
-                    "clave": f"{origen_txt}|{destino_txt}|{pallet_num}|{ubic_txt}",
-                    "label": f"Pallet {pallet_num} | {origen_txt} -> {destino_txt} | ubicacion actual: {ubic_txt or 'PENDIENTE'}",
-                    "pallet": pallet_num,
-                    "origen": origen_txt,
-                    "destino": destino_txt,
-                    "ubicacion_actual": ubic_txt,
-                }
-            )
-
-        # Quito duplicados conservando orden.
-        registros_unicos = []
-        claves_vistas = set()
-        for reg in registros_pallet:
-            if reg["clave"] not in claves_vistas:
-                claves_vistas.add(reg["clave"])
-                registros_unicos.append(reg)
-
-        with st.container(border=True):
-            st.markdown("**Cambio rapido de ubicacion**")
-            col_sel_pallet, col_nueva_ubi, col_btn_ubi = st.columns([2.6, 1.2, 1.1])
-            opciones = [r["label"] for r in registros_unicos]
-            pallet_label_sel = col_sel_pallet.selectbox(
-                "Pallet a cambiar",
-                opciones,
-                key="ubi_pallet_select_rapido",
-            )
-            reg_sel = registros_unicos[opciones.index(pallet_label_sel)] if opciones else None
-            nueva_ubicacion_rapida = col_nueva_ubi.text_input(
-                "Nueva ubicacion",
-                value=(reg_sel.get("ubicacion_actual", "") if reg_sel else ""),
-                placeholder="Ej: 4E2, 3C4, 3J4.1",
-                key="ubi_pallet_nueva_rapida",
-            )
-            if col_btn_ubi.button("Guardar cambio", type="primary", key="btn_guardar_ubi_rapida"):
-                if not reg_sel:
-                    st.error("No encontre el pallet seleccionado.")
-                else:
-                    nueva_ubicacion = normalizar_locacion(nueva_ubicacion_rapida)
-                    if not nueva_ubicacion:
-                        st.error("Escribi una ubicacion valida antes de guardar.")
-                    else:
-                        cambios_ubicacion = 0
-                        for item in st.session_state.get("pick_items", []):
-                            if not isinstance(item, dict):
-                                continue
-                            if entero_seguro(item.get("pallet", 0), 0) != int(reg_sel["pallet"]):
-                                continue
-                            if reg_sel["origen"] and str(item.get("deposito_origen", "")).strip().upper() != reg_sel["origen"]:
-                                continue
-                            if reg_sel["destino"] and str(item.get("deposito_destino", "")).strip().upper() != reg_sel["destino"]:
-                                continue
-                            if str(item.get("ubicacion", "")).strip().upper() != nueva_ubicacion:
-                                item["ubicacion"] = nueva_ubicacion
-                                item["ubicacion_recepcion"] = nueva_ubicacion
-                                item["observaciones"] = (str(item.get("observaciones", "")).strip() + " | Ubicacion modificada por pallet").strip(" |")
-                                cambios_ubicacion += 1
-                        guardar_ubicacion_pallet_override(reg_sel["origen"], reg_sel["destino"], reg_sel["pallet"], nueva_ubicacion)
-                        guardar_mudanza_actual_db()
-                        if cambios_ubicacion:
-                            st.success(f"Ubicacion del pallet {reg_sel['pallet']} actualizada a {nueva_ubicacion} en {cambios_ubicacion} linea(s).")
-                        else:
-                            st.info("No hubo cambios para guardar. Puede que el pallet ya tenga esa ubicacion.")
-                        st.rerun()
-
-        # --------------------------------------------------------------
-        # Editor masivo: permite cambiar varios pallets juntos.
-        # --------------------------------------------------------------
-        st.markdown("**Editor masivo de ubicaciones por pallet**")
-        editor_ubi = resumen_norm.copy()
-        if "Ubicaciones" not in editor_ubi.columns:
-            editor_ubi["Ubicaciones"] = ""
-        editor_ubi.insert(0, "Aplicar cambio", False)
-        editor_ubi["Nueva ubicacion"] = editor_ubi["Ubicaciones"].fillna("").astype(str)
-
-        columnas_visibles = [
+        columnas_resumen = [
             c for c in [
-                "Aplicar cambio",
                 "Deposito origen",
                 "Deposito destino",
                 "Pallet",
                 "Cantidad de cajas",
                 "Ubicaciones",
-                "Nueva ubicacion",
+                "Ubicacion anterior",
                 "Cantidad de codigos diferentes",
                 "Piezas totales",
                 "Codigos que componen el pallet",
-            ] if c in editor_ubi.columns
+                "Descripciones",
+            ] if c in resumen_editor.columns
         ]
-        editor_ubi = editor_ubi[columnas_visibles]
+        resumen_editor = resumen_editor[columnas_resumen]
 
-        editor_ubi_editado = st.data_editor(
-            editor_ubi,
+        st.caption("Cambia la celda de Ubicaciones. Ejemplo: en el pallet 76 cambia 4E2 por 3C3 y luego guarda.")
+        resumen_editado = st.data_editor(
+            resumen_editor,
             use_container_width=True,
             hide_index=True,
-            disabled=[c for c in editor_ubi.columns if c not in {"Aplicar cambio", "Nueva ubicacion"}],
+            disabled=[c for c in resumen_editor.columns if c != "Ubicaciones"],
             column_config={
-                "Aplicar cambio": st.column_config.CheckboxColumn(
-                    "Aplicar",
-                    help="Marca esta fila para aplicar la Nueva ubicacion al pallet.",
-                    default=False,
-                ),
-                "Nueva ubicacion": st.column_config.TextColumn(
-                    "Nueva ubicacion",
-                    help="Escribi la nueva ubicacion para el pallet. Ejemplo: 3C4, 4E2, 3J4.1",
+                "Ubicaciones": st.column_config.TextColumn(
+                    "Ubicaciones",
+                    help="Edita aca la ubicacion oficial del pallet. Al guardar se aplica en cascada.",
                     required=False,
+                ),
+                "Ubicacion anterior": st.column_config.TextColumn(
+                    "Ubicacion anterior",
+                    help="Valor anterior, solo para comparar.",
+                    disabled=True,
                 ),
             },
             num_rows="fixed",
-            key="resumen_pallets_ubicaciones_editor_masivo",
+            key="composicion_pallet_editor_directo",
         )
 
-        if st.button("Guardar ubicaciones marcadas", type="primary", key="btn_guardar_ubi_masivo"):
+        if st.button("Guardar ubicaciones de esta tabla", type="primary", key="btn_guardar_ubicaciones_composicion_directa"):
             cambios_ubicacion = 0
             pallets_actualizados = []
             overrides_a_guardar = {}
-            for row in editor_ubi_editado.to_dict("records"):
+            cambios_solicitados = 0
+
+            for row in resumen_editado.to_dict("records"):
                 row = {limpiar_columna_visible(k): v for k, v in row.items()}
-                aplicar = bool(row.get("Aplicar cambio", False))
-                if not aplicar:
-                    continue
                 pallet_objetivo = entero_seguro(row.get("Pallet", 0), 0)
                 if pallet_objetivo <= 0:
                     continue
-                depo_origen_obj = str(row.get("Deposito origen", "")).strip().upper()
-                depo_destino_obj = str(row.get("Deposito destino", "")).strip().upper()
-                nueva_ubicacion = normalizar_locacion(row.get("Nueva ubicacion", ""))
-                if not nueva_ubicacion:
+
+                depo_origen_obj = str(row.get("Deposito origen", "")).strip().upper() or "DARKINEL"
+                depo_destino_obj = str(row.get("Deposito destino", "")).strip().upper() or "POLO LOGISTICO"
+                ubicacion_anterior = normalizar_locacion(row.get("Ubicacion anterior", ""))
+                nueva_ubicacion = normalizar_locacion(row.get("Ubicaciones", ""))
+                if not nueva_ubicacion or nueva_ubicacion in {"PENDIENTE", "NAN"}:
                     continue
-                cambios_pallet = 0
+                if nueva_ubicacion == ubicacion_anterior:
+                    continue
+
+                cambios_solicitados += 1
                 overrides_a_guardar[clave_ubicacion_pallet(depo_origen_obj, depo_destino_obj, pallet_objetivo)] = nueva_ubicacion
+
+                cambios_pallet = 0
                 for item in st.session_state.get("pick_items", []):
                     if not isinstance(item, dict):
                         continue
                     if entero_seguro(item.get("pallet", 0), 0) != pallet_objetivo:
                         continue
-                    if depo_origen_obj and str(item.get("deposito_origen", "")).strip().upper() != depo_origen_obj:
+                    origen_item = str(item.get("deposito_origen", "")).strip().upper() or "DARKINEL"
+                    destino_item = str(item.get("deposito_destino", "")).strip().upper() or "POLO LOGISTICO"
+                    if origen_item != depo_origen_obj or destino_item != depo_destino_obj:
                         continue
-                    if depo_destino_obj and str(item.get("deposito_destino", "")).strip().upper() != depo_destino_obj:
-                        continue
-                    if str(item.get("ubicacion", "")).strip().upper() != nueva_ubicacion:
-                        item["ubicacion"] = nueva_ubicacion
-                        item["ubicacion_recepcion"] = nueva_ubicacion
-                        item["observaciones"] = (str(item.get("observaciones", "")).strip() + " | Ubicacion modificada por pallet").strip(" |")
-                        cambios_ubicacion += 1
-                        cambios_pallet += 1
-                if cambios_pallet:
-                    pallets_actualizados.append(f"Pallet {pallet_objetivo} -> {nueva_ubicacion}")
-            if overrides_a_guardar:
-                guardar_ubicaciones_pallet_override(overrides_a_guardar)
-            guardar_mudanza_actual_db()
-            if cambios_ubicacion:
-                st.success("Ubicaciones guardadas: " + "; ".join(pallets_actualizados))
-            else:
-                st.info("No hubo cambios para guardar. Marca Aplicar y completa Nueva ubicacion.")
-            st.rerun()
+                    item["ubicacion"] = nueva_ubicacion
+                    item["ubicacion_recepcion"] = nueva_ubicacion
+                    obs = str(item.get("observaciones", "")).strip()
+                    marca_obs = f"Ubicacion modificada por composicion: {ubicacion_anterior or 'SIN UBICACION'} -> {nueva_ubicacion}"
+                    if marca_obs not in obs:
+                        item["observaciones"] = (obs + " | " + marca_obs).strip(" |")
+                    cambios_ubicacion += 1
+                    cambios_pallet += 1
 
-        st.caption("Si queres cambiar solo una caja o un articulo, usa la tabla Detalle de mudanza de abajo.")
+                pallets_actualizados.append(
+                    f"Pallet {pallet_objetivo}: {ubicacion_anterior or 'SIN UBICACION'} -> {nueva_ubicacion} ({cambios_pallet} lineas actuales; override guardado)"
+                )
+
+            if not cambios_solicitados:
+                st.info("No detecte cambios. Edita la columna Ubicaciones y luego toca Guardar.")
+            else:
+                if overrides_a_guardar:
+                    guardar_ubicaciones_pallet_override(overrides_a_guardar)
+                guardar_mudanza_actual_db()
+                st.success("Ubicaciones aplicadas en cascada: " + "; ".join(pallets_actualizados))
+                st.rerun()
 
     st.subheader("Detalle de mudanza")
     detalle_display = preparar_detalle_mudanza(df_operativo)
