@@ -58,8 +58,6 @@ st.set_page_config(
     layout="wide",
 )
 
-APP_VERSION_PEDIDOS = "2026-06-11 18:05 - PEDIDOS SEPARADOS MAZDA/KIA + HISTORIAL JIT"
-
 
 # -----------------------------
 # NormalizaciÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n de cÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digos
@@ -72,6 +70,7 @@ POSTGRES_DEFAULTS = {
     "password": "deposito_pass_cambiar",
 }
 CLOUD_TABLE = "estado_app"
+APP_VERSION_PEDIDOS = "2026-06-11 21:45 - PEDIDOS POR MARCA Y MODALIDAD VOR/AEREO/MARITIMO"
 
 
 def ahora_texto() -> str:
@@ -666,6 +665,28 @@ def codigo_para_pedido_mail(marca: str, articulo="", codigo_normalizado="") -> s
     if marca == "MAZDA" and "-" in articulo_txt:
         return articulo_txt
     return codigo_norm or articulo_txt
+
+
+MODALIDADES_PEDIDO = ["VOR", "AEREO", "MARITIMO"]
+
+
+def normalizar_modalidad_pedido(valor, default: str = "MARITIMO") -> str:
+    """Normaliza la modalidad real elegida para enviar el pedido a fabrica."""
+    texto = str(valor or "").strip().upper()
+    texto = texto.replace("Á", "A").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U")
+    if "VOR" in texto:
+        return "VOR"
+    if "AEREO" in texto or "AIR" in texto:
+        return "AEREO"
+    if "MARITIMO" in texto or "MARITIMA" in texto or "SEA" in texto or "BARCO" in texto:
+        return "MARITIMO"
+    default = str(default or "MARITIMO").strip().upper()
+    return default if default in MODALIDADES_PEDIDO else "MARITIMO"
+
+
+def hoja_modalidad_pedido(modalidad: str) -> str:
+    modalidad = normalizar_modalidad_pedido(modalidad)
+    return {"VOR": "VOR", "AEREO": "AEREO", "MARITIMO": "MARITIMO"}.get(modalidad, "MARITIMO")
 
 
 def normalizar_locacion(valor) -> str:
@@ -2031,36 +2052,61 @@ def guardar_aprendizaje_pedido(editor: pd.DataFrame) -> None:
     guardar_reglas_pedidos_db({"reglas": reglas})
 
 
-def armar_excel_pedido_mail(editor: pd.DataFrame, manuales: list[dict] | None = None, marca_filtro: str | None = None) -> bytes:
+def filas_pedido_para_excel(editor: pd.DataFrame, manuales: list[dict] | None = None, marca_filtro: str | None = None) -> pd.DataFrame:
     filas = []
     marca_filtro = str(marca_filtro or "").strip().upper()
-    if editor is not None and not editor.empty:
-        for row in editor.to_dict("records"):
-            marca = str(row.get("Marca", "") or "").strip().upper()
-            if marca_filtro and marca != marca_filtro:
-                continue
-            qty = pd.to_numeric(row.get("QTY", 0), errors="coerce")
-            if pd.isna(qty) or float(qty) <= 0:
-                continue
-            code = str(row.get("CODE", "") or "").strip().upper()
-            order = str(row.get("ORDER", "") or "").strip().upper()
-            if code and order:
-                filas.append({"ORDER": order, "CODE": code, "QTY": float(qty)})
-    for row in manuales or []:
+
+    def agregar_desde_row(row: dict) -> None:
         marca = str(row.get("Marca", "") or "").strip().upper()
         if marca_filtro and marca != marca_filtro:
-            continue
+            return
         qty = pd.to_numeric(row.get("QTY", 0), errors="coerce")
         if pd.isna(qty) or float(qty) <= 0:
-            continue
+            return
         code = str(row.get("CODE", "") or "").strip().upper()
         order = str(row.get("ORDER", "") or "").strip().upper()
+        modalidad = normalizar_modalidad_pedido(row.get("Modalidad pedido", row.get("Via", row.get("Via sugerida", ""))))
         if code and order:
-            filas.append({"ORDER": order, "CODE": code, "QTY": float(qty)})
-    salida = pd.DataFrame(filas, columns=["ORDER", "CODE", "QTY"])
+            filas.append({"MODALIDAD": modalidad, "ORDER": order, "CODE": code, "QTY": float(qty)})
+
+    if editor is not None and not editor.empty:
+        for row in editor.to_dict("records"):
+            agregar_desde_row(row)
+    for row in manuales or []:
+        agregar_desde_row(row)
+
+    salida = pd.DataFrame(filas, columns=["MODALIDAD", "ORDER", "CODE", "QTY"])
+    if not salida.empty:
+        salida["MODALIDAD"] = salida["MODALIDAD"].map(normalizar_modalidad_pedido)
+        salida["QTY"] = pd.to_numeric(salida["QTY"], errors="coerce").fillna(0)
+        salida = salida[salida["QTY"] > 0].copy()
+    return salida
+
+
+def escribir_excel_pedido_por_modalidad(writer, filas: pd.DataFrame, prefijo_hoja: str = "") -> None:
+    prefijo = str(prefijo_hoja or "").strip().upper()
+    base = filas.copy() if filas is not None else pd.DataFrame(columns=["MODALIDAD", "ORDER", "CODE", "QTY"])
+    if base.empty:
+        base = pd.DataFrame(columns=["MODALIDAD", "ORDER", "CODE", "QTY"])
+    # Hoja general: permite ver rapidamente toda la marca y la modalidad elegida por linea.
+    nombre_todos = f"{prefijo}_TODOS" if prefijo else "TODOS"
+    base[["MODALIDAD", "ORDER", "CODE", "QTY"]].to_excel(writer, index=False, sheet_name=nombre_todos[:31])
+    # Hojas para enviar/filtrar por modalidad. Mantienen el formato simple de fabrica: ORDER, CODE, QTY.
+    for modalidad in MODALIDADES_PEDIDO:
+        hoja = f"{prefijo}_{hoja_modalidad_pedido(modalidad)}" if prefijo else hoja_modalidad_pedido(modalidad)
+        sub = base[base["MODALIDAD"].map(normalizar_modalidad_pedido).eq(modalidad)].copy()
+        if sub.empty:
+            sub = pd.DataFrame(columns=["ORDER", "CODE", "QTY"])
+        else:
+            sub = sub[["ORDER", "CODE", "QTY"]]
+        sub.to_excel(writer, index=False, sheet_name=hoja[:31])
+
+
+def armar_excel_pedido_mail(editor: pd.DataFrame, manuales: list[dict] | None = None, marca_filtro: str | None = None) -> bytes:
+    filas = filas_pedido_para_excel(editor, manuales, marca_filtro=marca_filtro)
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        salida.to_excel(writer, index=False, sheet_name="ORDER")
+        escribir_excel_pedido_por_modalidad(writer, filas)
     return buffer.getvalue()
 
 
@@ -2068,33 +2114,9 @@ def armar_excel_pedido_mail_separado(editor: pd.DataFrame, manuales: list[dict] 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         for marca in ["MAZDA", "KIA"]:
-            filas = []
-            if editor is not None and not editor.empty:
-                for row in editor.to_dict("records"):
-                    if str(row.get("Marca", "") or "").strip().upper() != marca:
-                        continue
-                    qty = pd.to_numeric(row.get("QTY", 0), errors="coerce")
-                    if pd.isna(qty) or float(qty) <= 0:
-                        continue
-                    filas.append({
-                        "ORDER": str(row.get("ORDER", "") or "").strip().upper(),
-                        "CODE": str(row.get("CODE", "") or "").strip().upper(),
-                        "QTY": float(qty),
-                    })
-            for row in manuales or []:
-                if str(row.get("Marca", "") or "").strip().upper() != marca:
-                    continue
-                qty = pd.to_numeric(row.get("QTY", 0), errors="coerce")
-                if pd.isna(qty) or float(qty) <= 0:
-                    continue
-                filas.append({
-                    "ORDER": str(row.get("ORDER", "") or "").strip().upper(),
-                    "CODE": str(row.get("CODE", "") or "").strip().upper(),
-                    "QTY": float(qty),
-                })
-            pd.DataFrame(filas, columns=["ORDER", "CODE", "QTY"]).to_excel(writer, index=False, sheet_name=marca)
+            filas = filas_pedido_para_excel(editor, manuales, marca_filtro=marca)
+            escribir_excel_pedido_por_modalidad(writer, filas, prefijo_hoja=marca)
     return buffer.getvalue()
-
 
 def cargar_historial_pedidos_db() -> Dict[str, object]:
     estado = cargar_estado_db("pedidos_historial", {"pedidos": [], "pedido_seq": 0})
@@ -2175,7 +2197,8 @@ def registrar_pedido_historial(editor: pd.DataFrame, manuales: list[dict] | None
                 "codigo_normalizado": codigo_norm,
                 "articulo": articulo,
                 "descripcion": str(row.get("Descripcion", "") or "").strip(),
-                "via": str(row.get("Via", row.get("Via sugerida", "")) or "").strip(),
+                "via": normalizar_modalidad_pedido(row.get("Modalidad pedido", row.get("Via", row.get("Via sugerida", "")))),
+                "via_sugerida": str(row.get("Via", row.get("Via sugerida", "")) or "").strip(),
                 "stock_fisico_al_pedir": numero_seguro(row.get("Stock fisico", 0), 0),
                 "pedido_pendiente_previo": numero_seguro(row.get("Pedido pendiente", 0), 0),
                 "stock_proyectado_al_pedir": numero_seguro(row.get("Stock proyectado", 0), 0),
@@ -2235,7 +2258,8 @@ def crear_backorder_desde_editor(editor: pd.DataFrame, manuales: list[dict] | No
                 "articulo": articulo,
                 "descripcion": str(row.get("Descripcion", "") or "").strip(),
                 "marca": marca,
-                "via": str(row.get("Via", row.get("Via sugerida", "")) or "").strip(),
+                "via": normalizar_modalidad_pedido(row.get("Modalidad pedido", row.get("Via", row.get("Via sugerida", "")))),
+                "via_sugerida": str(row.get("Via", row.get("Via sugerida", "")) or "").strip(),
                 "cantidad_pedida": qty,
                 "cantidad_pendiente_manual": qty,
                 "fecha_pedido": ahora,
@@ -4737,7 +4761,6 @@ inicializar_estado()
 forzar_uso_postgres = bool(st.session_state.pop("forzar_uso_postgres_una_corrida", False))
 
 st.title("Lector de codigos + Mudanza Darkinel -> Polo Logistico")
-st.success(f"APP ACTUALIZADA: {APP_VERSION_PEDIDOS}")
 st.caption(
     "Busca codigos en la base, arma pallets, registra ubicaciones, controla salidas de Polo y genera las bases actualizadas de DARKINEL y POLO LOGISTICO."
 )
@@ -6547,8 +6570,8 @@ elif seccion_activa == "6) Consulta stock":
 
 elif seccion_activa == "7) Pedidos":
     st.subheader("Sugerencia de pedidos")
-    st.info("El pedido ahora se trabaja separado: MAZDA = codigos con guion / KIA = codigos sin guion. Si ves KIA mezclado con MAZDA, no estas ejecutando esta version.")
-    st.caption("Cruza venta mensual, stock fisico, pedidos pendientes historicos y demora estimada: maritimo 6 meses, aereo 35 dias y aereo VOR 20 dias.")
+    st.success(f"APP ACTUALIZADA: {APP_VERSION_PEDIDOS}")
+    st.caption("Cruza venta mensual, stock fisico, pedidos pendientes e historial. Luego podes definir la modalidad real por linea: VOR, AEREO o MARITIMO.")
 
     p_cfg1, p_cfg2, p_cfg3, p_cfg4 = st.columns([1, 1, 1, 1])
     meses_promedio_pedido = p_cfg1.number_input("Promedio venta ultimos meses", min_value=1, max_value=24, value=6, step=1)
@@ -6556,8 +6579,8 @@ elif seccion_activa == "7) Pedidos":
     solo_con_pedido = p_cfg3.checkbox("Mostrar solo sugeridos", value=True)
     incluir_sin_venta_pedido = p_cfg4.checkbox("Incluir sin venta mensual", value=False)
     marca_pedido = st.radio(
-        "Fabrica / marca para revisar - NO MEZCLA MARCAS",
-        ["MAZDA", "KIA", "TODAS"],
+        "Fabrica / marca para revisar",
+        ["TODAS", "MAZDA", "KIA"],
         horizontal=True,
         help="Mazda se identifica por codigos con guion; Kia por codigos sin guion.",
     )
@@ -6658,7 +6681,8 @@ elif seccion_activa == "7) Pedidos":
                 "Codigo normalizado": pedido_mail_base["Codigo normalizado"].astype(str),
                 "Articulo": pedido_mail_base["Articulo"].astype(str),
                 "Descripcion": pedido_mail_base["Descripcion"].astype(str),
-                "Via": pedido_mail_base["Via sugerida"].astype(str),
+                "Via sugerida": pedido_mail_base["Via sugerida"].astype(str),
+                "Modalidad pedido": pedido_mail_base["Via sugerida"].map(lambda x: normalizar_modalidad_pedido(x, "MARITIMO")).astype(str),
                 "Venta mensual": pd.to_numeric(pedido_mail_base["Venta mensual"] if "Venta mensual" in pedido_mail_base.columns else pd.Series([0] * len(pedido_mail_base)), errors="coerce").fillna(0),
                 "Stock fisico": pd.to_numeric(pedido_mail_base["Stock fisico"] if "Stock fisico" in pedido_mail_base.columns else pd.Series([0] * len(pedido_mail_base)), errors="coerce").fillna(0),
                 "Pedido pendiente": pd.to_numeric(pedido_mail_base["Pedido pendiente"] if "Pedido pendiente" in pedido_mail_base.columns else pd.Series([0] * len(pedido_mail_base)), errors="coerce").fillna(0),
@@ -6668,13 +6692,19 @@ elif seccion_activa == "7) Pedidos":
                 "Comentario usuario": pedido_mail_base.get("Comentario usuario", "").astype(str) if "Comentario usuario" in pedido_mail_base.columns else "",
             }
         )
+        st.info("Antes de descargar, ajusta QTY y Modalidad pedido por cada articulo. En una misma marca podes mezclar VOR, AEREO y MARITIMO.")
         pedido_editor = st.data_editor(
             pedido_editor_base,
             use_container_width=True,
             hide_index=True,
-            disabled=["Marca", "CODE", "Codigo normalizado", "Articulo", "Descripcion", "Via", "Cantidad sugerida original", "Venta mensual", "Stock fisico", "Pedido pendiente", "Stock proyectado", "Motivo"],
+            disabled=["Marca", "CODE", "Codigo normalizado", "Articulo", "Descripcion", "Via sugerida", "Cantidad sugerida original", "Venta mensual", "Stock fisico", "Pedido pendiente", "Stock proyectado", "Motivo"],
             column_config={
                 "QTY": st.column_config.NumberColumn("QTY", min_value=0.0, step=1.0),
+                "Modalidad pedido": st.column_config.SelectboxColumn(
+                    "Modalidad pedido",
+                    options=MODALIDADES_PEDIDO,
+                    help="Modalidad real que vas a pedir a fabrica para esta linea.",
+                ),
                 "Decision usuario": st.column_config.SelectboxColumn(
                     "Decision usuario",
                     options=["", "NO PEDIR ESTA VEZ", "NO PEDIR MAS", "PEDIDO ESPECIAL", "ESTACIONAL/ZAFRAL", "OFERTA PUNTUAL"],
@@ -6687,11 +6717,12 @@ elif seccion_activa == "7) Pedidos":
         st.markdown("**Agregar codigo manual al pedido**")
         if "pedido_manual_rows" not in st.session_state:
             st.session_state.pedido_manual_rows = []
-        man0, man1, man2, man3 = st.columns([0.8, 1, 1.5, 1])
+        man0, man1, man2, man3, man4 = st.columns([0.8, 1, 1.5, 1, 1])
         manual_marca = man0.selectbox("Marca manual", ["MAZDA", "KIA"], key="manual_marca_pedido")
         manual_order = man1.text_input("ORDER manual", value=str(order_default).strip().upper() or "HC1EA", key="manual_order_pedido")
         manual_code = man2.text_input("CODE manual nuevo", placeholder="Mazda con guion / Kia sin guion", key="manual_code_pedido")
         manual_qty = man3.number_input("QTY manual", min_value=0.0, value=0.0, step=1.0, key="manual_qty_pedido")
+        manual_modalidad = man4.selectbox("Modalidad manual", MODALIDADES_PEDIDO, key="manual_modalidad_pedido")
         manual_comment = st.text_input("Comentario manual", placeholder="Motivo / proveedor / referencia", key="manual_comment_pedido")
         if st.button("Agregar codigo manual"):
             if not str(manual_code).strip():
@@ -6709,7 +6740,8 @@ elif seccion_activa == "7) Pedidos":
                         "Codigo normalizado": normalizar_codigo(manual_code),
                         "Articulo": str(manual_code).strip().upper(),
                         "Descripcion": "",
-                        "Via": "MANUAL",
+                        "Via sugerida": "MANUAL",
+                        "Modalidad pedido": normalizar_modalidad_pedido(manual_modalidad),
                         "Comentario": str(manual_comment).strip(),
                     }
                 )
@@ -6726,21 +6758,22 @@ elif seccion_activa == "7) Pedidos":
             st.success("Decisiones guardadas. Se van a aplicar en proximas sugerencias.")
             st.rerun()
 
+        st.caption("Los Excel de marca salen separados por hojas: TODOS, VOR, AEREO y MARITIMO. La hoja VOR/AEREO/MARITIMO queda en formato ORDER, CODE, QTY para reenviar segun modalidad.")
         d1, d2, d3 = st.columns(3)
         d1.download_button(
-            "Descargar pedido MAZDA",
+            "Descargar pedido MAZDA por modalidad",
             data=armar_excel_pedido_mail(pedido_editor, st.session_state.get("pedido_manual_rows", []), marca_filtro="MAZDA"),
             file_name=f"pedido_mazda_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         d2.download_button(
-            "Descargar pedido KIA",
+            "Descargar pedido KIA por modalidad",
             data=armar_excel_pedido_mail(pedido_editor, st.session_state.get("pedido_manual_rows", []), marca_filtro="KIA"),
             file_name=f"pedido_kia_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         d3.download_button(
-            "Descargar completo separado",
+            "Descargar completo separado por marca y modalidad",
             data=armar_excel_pedido_mail_separado(pedido_editor, st.session_state.get("pedido_manual_rows", [])),
             file_name=f"pedido_separado_marcas_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
